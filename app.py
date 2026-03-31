@@ -3,12 +3,11 @@ import pandas as pd
 from fpdf import FPDF
 import io
 
-st.set_page_config(page_title="Estrategia Jurídica - Auditoría", layout="wide")
+st.set_page_config(page_title="Auditoría - Estrategia Jurídica", layout="wide")
 
 st.title("📋 Seguimiento Técnico de Indicadores")
 st.markdown("---")
 
-# Carga de archivos (Mantenemos la multicarga que te gustó)
 archivos = st.file_uploader("📁 Cargar archivos de delegaciones", type=["xlsm"], accept_multiple_files=True)
 
 def generar_pdf(datos, delegacion, trimestre):
@@ -24,6 +23,7 @@ def generar_pdf(datos, delegacion, trimestre):
         pdf.multi_cell(190, 7, f"SECCIÓN: {d['titulo']}")
         pdf.set_font("Arial", '', 10)
         pdf.multi_cell(190, 6, f"Indicador: {d['indicador']} | Meta: {d['meta']}")
+        pdf.multi_cell(190, 6, f"Estado Final: {d['estado']}")
         pdf.set_text_color(0, 0, 255)
         pdf.multi_cell(190, 6, f"OBSERVACIONES: {d['obs']}")
         pdf.set_text_color(0, 0, 0)
@@ -36,10 +36,9 @@ if archivos:
     archivo_sel = st.selectbox("🎯 Delegación a revisar", [a.name for a in archivos])
     archivo_actual = next(a for a in archivos if a.name == archivo_sel)
     
-    # Leer Excel
     df = pd.read_excel(archivo_actual, sheet_name=0, header=None)
 
-    # Buscar nombre de la unidad (Buscador dinámico)
+    # Buscador de Unidad
     nombre_unidad = "No detectada"
     for r in range(5):
         for c in range(df.shape[1]):
@@ -49,16 +48,19 @@ if archivos:
 
     st.subheader(f"📍 Unidad: {nombre_unidad}")
     
+    # Mapeo de columnas incluyendo Cantidad (Columna L=11, Q=16, etc.)
     trim_map = {
-        "I Trimestre": {"av": 9, "ds": 10}, "II Trimestre": {"av": 14, "ds": 15},
-        "III Trimestre": {"av": 19, "ds": 20}, "IV Trimestre": {"av": 24, "ds": 25}
+        "I Trimestre": {"av": 9, "ds": 10, "cant": 11}, 
+        "II Trimestre": {"av": 14, "ds": 15, "cant": 16},
+        "III Trimestre": {"av": 19, "ds": 20, "cant": 21},
+        "IV Trimestre": {"av": 24, "ds": 25, "cant": 26}
     }
     t_sel = st.selectbox("Trimestre de Evaluación", list(trim_map.keys()))
+    indices = trim_map[t_sel]
 
     reporte_final = []
     linea_actual, prob_actual = "", ""
 
-    # Procesamiento por línea de acción
     for i in range(7, len(df)):
         val_d = str(df.iloc[i, 3]) # Línea de Acción (Col D)
         val_f = str(df.iloc[i, 5]) # Problemática (Col F)
@@ -71,30 +73,42 @@ if archivos:
         if pd.isna(indicador) or "Indicadores" in str(indicador):
             continue
 
-        # --- ESTRUCTURA DE TABLA + EDITABLES ---
+        # --- LÓGICA DE ASIGNACIÓN AUTOMÁTICA ---
+        cantidad_val = df.iloc[i, indices["cant"]]
+        avance_original = df.iloc[i, indices["av"]]
+        
+        # Si hay datos en cantidad, validamos el estado
+        if pd.notna(cantidad_val) and str(cantidad_val).strip() != "" and cantidad_val != 0:
+            estado_calculado = "Con Actividades / Completado"
+            color_estado = "green"
+        else:
+            estado_calculado = "Sin Actividades"
+            color_estado = "red"
+
         with st.container():
-            # 1. Tabla de datos del Excel (Solo lectura)
+            # Tabla de lectura
             datos_tabla = {
                 "Categoría": [df.iloc[i, 2]],
                 "Indicador": [indicador],
-                "Avance": [df.iloc[i, trim_map[t_sel]['av']]],
-                "Descripción Reportada": [df.iloc[i, trim_map[t_sel]['ds']]]
+                "Cantidad Detectada": [cantidad_val],
+                "Estado Sugerido": [estado_calculado]
             }
             st.table(pd.DataFrame(datos_tabla))
 
-            # 2. Espacio para Editables (Tu Auditoría)
+            # Espacio para Editables
             c1, c2, c3 = st.columns([1, 2, 1])
             with c1:
-                meta_e = st.text_input("Meta Anual (Ajustar si es necesario)", value=df.iloc[i, 8], key=f"m_{i}")
+                meta_e = st.text_input("Meta Anual", value=df.iloc[i, 8], key=f"m_{i}")
+                st.markdown(f"**Avance Real:** :{color_estado}[{estado_calculado}]")
             with c2:
                 obs_e = st.text_area("Observaciones Legales / Técnicas", key=f"o_{i}", height=68)
             with c3:
-                st.write("¿Cumplimiento?")
+                st.write("¿Verificación?")
                 ver_e = st.checkbox("Evidencia Correcta", key=f"v_{i}")
 
             reporte_final.append({
                 "titulo": f"{linea_actual} - {prob_actual}", "indicador": indicador, 
-                "meta": meta_e, "obs": obs_e, "v": ver_e
+                "meta": meta_e, "estado": estado_calculado, "obs": obs_e, "v": ver_e
             })
             st.markdown("---")
 
