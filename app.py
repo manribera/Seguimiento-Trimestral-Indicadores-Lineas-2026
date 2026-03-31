@@ -1,55 +1,66 @@
 import streamlit as st
 import pandas as pd
 
-# Interfaz Minimalista Profesional
-st.set_page_config(page_title="Auditoría Estrategia Jurídica", layout="wide")
+st.set_page_config(page_title="Estrategia Jurídica - Auditoría Total", layout="wide")
+st.markdown("### 📋 Seguimiento Integral de Líneas de Acción")
 
-st.markdown("### 📋 Detalle de la Auditoría")
-
-archivo = st.file_uploader("Cargar Informe de Avance (.xlsm)", type=["xlsm"])
+archivo = st.file_uploader("Cargar libro de delegación", type=["xlsm"])
 
 if archivo:
-    # Leer el Excel (el Comparador busca en la hoja de 'Líneas de Acción')
-    df = pd.read_excel(archivo, sheet_name=0, header=None) # Ajustar según hoja real
+    # Leer la primera hoja donde están los datos (índice 0)
+    df = pd.read_excel(archivo, sheet_name=0, header=None)
 
-    # 🕵️ El Comparador rastrea la Delegación
-    delegacion = "No detectada"
-    for r in range(10): 
-        for c in range(df.shape[1]):
-            if "DELEGACION POLICIAL" in str(df.iloc[r, c]).upper():
-                delegacion = df.iloc[r, c+1] 
-                break
+    # 1. Localizar dinámicamente la fila donde empiezan los indicadores
+    # Buscamos la celda que contiene "GL" para saber dónde empezar
+    inicio_fila = None
+    for i, row in df.iterrows():
+        if "GL" in row.values:
+            inicio_fila = i
+            break
 
-    st.info(f"📍 Delegación: {delegacion}")
-
-    # --- Filtros ---
-    col_t, col_c = st.columns(2)
-    with col_t:
-        trimestre_sel = st.selectbox("Seleccione el Trimestre", ["I Trimestre", "II Trimestre", "III Trimestre", "IV Trimestre"])
-    with col_c:
-        cat_sel = st.radio("Categoría", ["GL", "FP"], horizontal=True)
-
-    st.markdown("---")
-
-    # --- Simulación de carga de una línea de acción ---
-    # En la versión final, esto será un bucle que recorra cada indicador
-    with st.expander("Ver Línea de Acción e Indicadores", expanded=True):
+    if inicio_fila is not None:
+        # Extraemos los datos desde esa fila hacia abajo
+        datos = df.iloc[inicio_fila:].copy()
         
-        # Datos extraídos del Excel (Ejemplo basado en tu imagen)
-        meta_excel = "2 por año, 4 en total." 
-        desc_excel = "Charlas de Educación en Seguridad..."
+        # 2. Definir Columnas según tu imagen (Mapeo dinámico)
+        # Col G (Indice 6): Indicadores | Col I (Indice 8): Meta
+        # Bloque I Trimestre: Col J (Avance), Col K (Descripción)
+        
+        trimestre_opciones = {
+            "I Trimestre": {"avance": 9, "desc": 10},
+            "II Trimestre": {"avance": 14, "desc": 15}, # Ajustado por bloques de 5
+            "III Trimestre": {"avance": 19, "desc": 20},
+            "IV Trimestre": {"avance": 24, "desc": 25}
+        }
 
-        meta_edit = st.text_input("Meta Anual (Editable)", value=meta_excel)
-        
-        st.text_area("Avance y Descripción (Lectura)", value=desc_excel, height=100, disabled=True)
-        
-        # Apartado de observaciones por línea
-        st.text_area("Observaciones del Auditor por Línea", placeholder="Escriba aquí su análisis de cumplimiento...")
-        
-        col_check, col_vacia = st.columns([1, 3])
-        with col_check:
-            evidencia = st.checkbox("✔ Cumple con la evidencia documental")
+        trim_sel = st.selectbox("Seleccione Trimestre para Seguimiento", list(trimestre_opciones.keys()))
+        col_idx = trimestre_opciones[trim_sel]
 
-    # Botón de acción
-    if st.button("Generar Informe Trimestral (PDF)"):
-        st.success(f"Informe de {delegacion} - {trimestre_sel} preparado para descarga.")
+        st.markdown("---")
+
+        # 3. Bucle para visualizar TODAS las líneas encontradas
+        for index, fila in datos.iterrows():
+            indicador_texto = fila[6] # Columna G
+            meta_texto = fila[8]      # Columna I
+            avance_valor = fila[col_idx["avance"]]
+            desc_valor = fila[col_idx["desc"]]
+
+            # Detener el bucle si llegamos a una fila vacía de indicadores
+            if pd.isna(indicador_texto):
+                continue
+
+            with st.expander(f"🔍 {indicador_texto}", expanded=False):
+                col_a, col_b = st.columns(2)
+                
+                with col_a:
+                    st.text_input(f"Meta - L{index}", value=meta_texto, key=f"meta_{index}")
+                    st.write(f"**Avance Reportado:** {avance_valor}")
+                
+                with col_b:
+                    st.text_area(f"Descripción - L{index}", value=desc_valor, disabled=True, key=f"desc_{index}")
+                
+                st.text_area("Observaciones de Auditoría", key=f"obs_{index}", placeholder="Añada aquí el seguimiento...")
+                st.checkbox("Evidencia verificada", key=f"check_{index}")
+
+    else:
+        st.error("No se pudo localizar la columna de indicadores (GL/FP). Revise el formato del archivo.")
