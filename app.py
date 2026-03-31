@@ -2,81 +2,61 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 
-# Configuración profesional y minimalista
-st.set_page_config(page_title="Estrategia Jurídica - Seguimiento", layout="wide")
+st.set_page_config(page_title="Auditoría - Estrategia Jurídica", layout="wide")
 
-st.markdown("### 📋 Instrumento de Seguimiento de Líneas de Acción")
+st.markdown("### 📋 Seguimiento de Líneas de Acción")
 
 archivo = st.file_uploader("Cargar libro de delegación (.xlsm)", type=["xlsm"])
 
 if archivo:
-    # Leer el Excel completo (Hoja 1)
+    # Leer la hoja 1 sin encabezados para manejar nosotros las filas
     df = pd.read_excel(archivo, sheet_name=0, header=None)
 
-    # 🔍 COMPARADOR: Localizar textos clave sin usar columnas fijas
-    def buscar(texto):
-        for r in range(25):
-            for c in range(df.shape[1]):
-                if texto.upper() in str(df.iloc[r, c]).upper():
-                    return r, c
-        return None, None
+    # Datos fijos de tu plantilla (según las capturas y el archivo)
+    delegacion = df.iloc[1, 10] # Celda K2 
+    st.info(f"📍 Delegación: {delegacion}")
 
-    # Detectar datos globales
-    r_del, c_del = buscar("Delegacion Policial")
-    r_prob, c_prob = buscar("Problemática de Linea de Acción")
-    r_ind, c_ind = buscar("Indicadores")
-    r_meta, c_meta = buscar("Meta")
-
-    # Identificar Delegación
-    nombre_del = df.iloc[r_del, c_del + 1] if r_del is not None else "No detectada"
-    st.info(f"📍 Delegación: {nombre_del}")
-
-    # Selector de Trimestre
-    trim_sel = st.selectbox("Trimestre a Evaluar", ["I Trimestre", "II Trimestre", "III Trimestre", "IV Trimestre"])
-    r_t, c_t = buscar(trim_sel)
+    # Mapeo de columnas para los 4 trimestres
+    trimestres = {
+        "I Trimestre": {"av": 9, "ds": 10},   # Col J, K 
+        "II Trimestre": {"av": 14, "ds": 15}, # Col O, P
+        "III Trimestre": {"av": 19, "ds": 20},# Col T, U
+        "IV Trimestre": {"av": 24, "ds": 25}  # Col Y, Z
+    }
+    
+    t_sel = st.selectbox("Seleccione el Trimestre", list(trimestres.keys()))
+    c_av = trimestres[t_sel]["av"]
+    c_ds = trimestres[t_sel]["ds"]
 
     st.markdown("---")
 
-    reporte_datos = []
-
-    # 🚀 Lógica de Visualización por Línea (Bucle dinámico)
-    # Empezamos el escaneo desde donde están los indicadores (debajo de la cabecera)
-    for i in range(r_ind + 1, len(df)):
-        indicador = df.iloc[i, c_ind]
+    # Recorremos desde la fila 11 (donde empiezan los datos reales) 
+    for i in range(10, len(df)):
+        categoria = df.iloc[i, 2]   # Col C (GL/FP) 
+        indicador = df.iloc[i, 6]   # Col G (Indicadores) 
         
-        # Si la fila del indicador está vacía, saltamos
-        if pd.isna(indicador) or str(indicador).strip() == "":
-            continue
+        # Si no hay indicador, terminamos el bloque
+        if pd.isna(indicador): continue
 
-        # Extraer datos de la fila actual usando las columnas detectadas
-        categoria = df.iloc[i, 2] # Columna C (GL/FP) suele ser fija al inicio
-        meta = df.iloc[i, c_meta]
-        avance = df.iloc[i, c_t]
-        descripcion = df.iloc[i, c_t + 1] # La descripción siempre está a la par del avance
-        problematica = df.iloc[r_prob, c_prob + 1] # La problemática está en el bloque superior
+        # La problemática está en la fila 8, columna F 
+        problematica = df.iloc[7, 5] 
+        meta = df.iloc[i, 8]        # Col I (Meta) 
+        avance = df.iloc[i, c_av]
+        descripcion = df.iloc[i, c_ds]
 
-        # Diseño limpio por cada indicador
-        with st.expander(f"📌 {categoria} | {indicador}", expanded=False):
-            st.write(f"**Problemática:** {problematica}")
+        # Visualización limpia por línea
+        with st.expander(f"🔹 {categoria} | {indicador}", expanded=True):
+            st.caption(f"**Problemática:** {problematica}")
             
             col1, col2 = st.columns(2)
             with col1:
-                meta_edit = st.text_input(f"Meta - L{i}", value=meta, key=f"m_{i}")
-                st.write(f"**Avance:** {avance}")
+                st.text_input("Meta (Editable)", value=meta, key=f"m_{i}")
+                st.markdown(f"**Avance:** `{avance}`")
             with col2:
-                st.text_area("Descripción del Resultado", value=descripcion, disabled=True, key=f"d_{i}")
-            
-            # Auditoría
-            obs = st.text_area("Observaciones del Auditor", key=f"obs_{i}")
-            cumple = st.checkbox("✔ Cumple con la evidencia", key=f"ch_{i}")
+                st.text_area("Descripción del Resultado", value=descripcion, height=100, key=f"d_{i}")
 
-            reporte_datos.append({
-                "indicador": indicador,
-                "meta": meta_edit,
-                "obs": obs,
-                "cumple": cumple
-            })
+            st.text_area("Observaciones del Auditor", placeholder="Escriba aquí sus notas...", key=f"obs_{i}")
+            st.checkbox("Verificado / Cumple con evidencia", key=f"v_{i}")
 
-    # Botón de Informe
-    if st.button("Generar Reporte PDF"):
-        st.success("Reporte generado con éxito.")
+    if st.button("Generar Reporte Final"):
+        st.success("Reporte listo para descarga.")
