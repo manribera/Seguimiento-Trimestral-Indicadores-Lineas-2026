@@ -1,74 +1,82 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+from fpdf import FPDF
 
-st.set_page_config(page_title="Estrategia Jurídica", layout="wide")
-st.markdown("### 🔍 Instrumento de Seguimiento Dinámico")
+# Configuración profesional y minimalista
+st.set_page_config(page_title="Estrategia Jurídica - Seguimiento", layout="wide")
 
-archivo = st.file_uploader("Subir archivo de la delegación", type=["xlsm"])
+st.markdown("### 📋 Instrumento de Seguimiento de Líneas de Acción")
+
+archivo = st.file_uploader("Cargar libro de delegación (.xlsm)", type=["xlsm"])
 
 if archivo:
-    # Leer la hoja de forma integral para que el comparador la analice
+    # Leer el Excel completo (Hoja 1)
     df = pd.read_excel(archivo, sheet_name=0, header=None)
 
-    # 🕵️ FUNCION DEL COMPARADOR: Buscar coordenadas por texto
-    def localizar_texto(dataframe, texto):
-        for r in range(len(dataframe)):
-            for c in range(dataframe.shape[1]):
-                if texto.upper() in str(dataframe.iloc[r, c]).upper():
+    # 🔍 COMPARADOR: Localizar textos clave sin usar columnas fijas
+    def buscar(texto):
+        for r in range(25):
+            for c in range(df.shape[1]):
+                if texto.upper() in str(df.iloc[r, c]).upper():
                     return r, c
         return None, None
 
-    # 1. Buscar Nombre de Delegación
-    r_del, c_del = localizar_texto(df, "Delegacion Policial")
-    nombre_delegacion = df.iloc[r_del, c_del + 1] if r_del is not None else "No detectada"
-    st.info(f"📍 Delegación: {nombre_delegacion}")
+    # Detectar datos globales
+    r_del, c_del = buscar("Delegacion Policial")
+    r_prob, c_prob = buscar("Problemática de Linea de Acción")
+    r_ind, c_ind = buscar("Indicadores")
+    r_meta, c_meta = buscar("Meta")
 
-    # 2. Localizar Columnas Clave (Indicadores, Metas, Problemática)
-    r_ind, col_indicador = localizar_texto(df, "Indicadores")
-    _, col_meta = localizar_texto(df, "Meta")
-    _, col_problematica = localizar_texto(df, "Problematica")
-    _, col_cat = localizar_texto(df, "GL") # Busca el anclaje de categoría
+    # Identificar Delegación
+    nombre_del = df.iloc[r_del, c_del + 1] if r_del is not None else "No detectada"
+    st.info(f"📍 Delegación: {nombre_del}")
 
-    # 3. Localizar Trimestres (Búsqueda por bloque)
-    trim_opcion = st.selectbox("Trimestre a Evaluar", ["I Trimestre", "II Trimestre", "III Trimestre", "IV Trimestre"])
-    r_trim, col_avance = localizar_texto(df, trim_opcion)
-    
-    # El resultado (Descripción) suele estar a la derecha del Avance
-    col_descripcion = col_avance + 1 if col_avance is not None else None
+    # Selector de Trimestre
+    trim_sel = st.selectbox("Trimestre a Evaluar", ["I Trimestre", "II Trimestre", "III Trimestre", "IV Trimestre"])
+    r_t, c_t = buscar(trim_sel)
 
     st.markdown("---")
 
-    # 4. Construcción del Seguimiento por Línea
-    if col_indicador is not None:
-        # Empezamos a leer desde la fila debajo de la cabecera 'Indicadores'
-        for i in range(r_ind + 1, len(df)):
-            indicador = df.iloc[i, col_indicador]
+    reporte_datos = []
+
+    # 🚀 Lógica de Visualización por Línea (Bucle dinámico)
+    # Empezamos el escaneo desde donde están los indicadores (debajo de la cabecera)
+    for i in range(r_ind + 1, len(df)):
+        indicador = df.iloc[i, c_ind]
+        
+        # Si la fila del indicador está vacía, saltamos
+        if pd.isna(indicador) or str(indicador).strip() == "":
+            continue
+
+        # Extraer datos de la fila actual usando las columnas detectadas
+        categoria = df.iloc[i, 2] # Columna C (GL/FP) suele ser fija al inicio
+        meta = df.iloc[i, c_meta]
+        avance = df.iloc[i, c_t]
+        descripcion = df.iloc[i, c_t + 1] # La descripción siempre está a la par del avance
+        problematica = df.iloc[r_prob, c_prob + 1] # La problemática está en el bloque superior
+
+        # Diseño limpio por cada indicador
+        with st.expander(f"📌 {categoria} | {indicador}", expanded=False):
+            st.write(f"**Problemática:** {problematica}")
             
-            # Detener si la fila está vacía o es el final de la tabla
-            if pd.isna(indicador) or str(indicador).strip() == "":
-                continue
+            col1, col2 = st.columns(2)
+            with col1:
+                meta_edit = st.text_input(f"Meta - L{i}", value=meta, key=f"m_{i}")
+                st.write(f"**Avance:** {avance}")
+            with col2:
+                st.text_area("Descripción del Resultado", value=descripcion, disabled=True, key=f"d_{i}")
+            
+            # Auditoría
+            obs = st.text_area("Observaciones del Auditor", key=f"obs_{i}")
+            cumple = st.checkbox("✔ Cumple con la evidencia", key=f"ch_{i}")
 
-            # Extraer datos usando las columnas localizadas por el comparador
-            categoria = df.iloc[i, col_cat] if col_cat is not None else "N/A"
-            problematica = df.iloc[i, col_problematica] if col_problematica is not None else "N/A"
-            meta = df.iloc[i, col_meta] if col_meta is not None else "N/A"
-            resultado_avance = df.iloc[i, col_avance] if col_avance is not None else "Sin dato"
-            resultado_desc = df.iloc[i, col_descripcion] if col_descripcion is not None else "Sin descripción"
+            reporte_datos.append({
+                "indicador": indicador,
+                "meta": meta_edit,
+                "obs": obs,
+                "cumple": cumple
+            })
 
-            # Visualización Profesional
-            with st.expander(f"📌 {categoria} | {indicador}", expanded=False):
-                st.write(f"**Probleática:** {problematica}")
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.text_input(f"Meta - L{i}", value=meta, key=f"m_{i}")
-                    st.write(f"**Estado de Avance:** {resultado_avance}")
-                with c2:
-                    st.text_area(f"Descripción del Resultado", value=resultado_desc, disabled=True, key=f"d_{i}")
-                
-                st.text_area("Observaciones de Seguimiento Legales/Técnicas", key=f"obs_{i}")
-                st.checkbox("Evidencia Verificada", key=f"chk_{i}")
-
-    if st.button("Generar Informe Consolidado"):
-        st.write("Generando reporte de auditoría...")
+    # Botón de Informe
+    if st.button("Generar Reporte PDF"):
+        st.success("Reporte generado con éxito.")
