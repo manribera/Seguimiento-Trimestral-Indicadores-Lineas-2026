@@ -3,9 +3,9 @@ import pandas as pd
 from fpdf import FPDF
 import io
 
-st.set_page_config(page_title="Auditoría - Estrategia Jurídica", layout="wide")
+st.set_page_config(page_title="Estrategia Jurídica - Auditoría", layout="wide")
 
-st.title("📋 Seguimiento Técnico de Indicadores")
+st.title("📋 Seguimiento Técnico: Líneas y Problemáticas")
 st.markdown("---")
 
 archivos = st.file_uploader("📁 Cargar archivos de delegaciones", type=["xlsm"], accept_multiple_files=True)
@@ -38,7 +38,7 @@ if archivos:
     
     df = pd.read_excel(archivo_actual, sheet_name=0, header=None)
 
-    # Buscador de Unidad
+    # Buscador dinámico de nombre de delegación
     nombre_unidad = "No detectada"
     for r in range(5):
         for c in range(df.shape[1]):
@@ -48,7 +48,7 @@ if archivos:
 
     st.subheader(f"📍 Unidad: {nombre_unidad}")
     
-    # Mapeo de columnas incluyendo Cantidad (Columna L=11, Q=16, etc.)
+    # Mapeo de columnas (Avance, Descripción, Cantidad)
     trim_map = {
         "I Trimestre": {"av": 9, "ds": 10, "cant": 11}, 
         "II Trimestre": {"av": 14, "ds": 15, "cant": 16},
@@ -61,23 +61,25 @@ if archivos:
     reporte_final = []
     linea_actual, prob_actual = "", ""
 
+    # Procesamiento por fila (Desde fila 8 para capturar títulos)
     for i in range(7, len(df)):
-        val_d = str(df.iloc[i, 3]) # Línea de Acción (Col D)
-        val_f = str(df.iloc[i, 5]) # Problemática (Col F)
-        indicador = df.iloc[i, 6]  # Indicador (Col G)
+        val_d = str(df.iloc[i, 3]) # Columna D: Linea de Accion #X
+        val_f = str(df.iloc[i, 5]) # Columna F: Problematica
 
+        # Si detectamos un nuevo bloque de Línea de Acción, actualizamos el título
         if "LINEA DE ACCION" in val_d.upper():
-            linea_actual, prob_actual = val_d, (val_f if pd.notna(df.iloc[i, 5]) else prob_actual)
-            st.markdown(f"### 🚩 {linea_actual} - {prob_actual}")
+            linea_actual = val_d
+            prob_actual = val_f if pd.notna(df.iloc[i, 5]) else prob_actual
+            st.markdown(f"## 🚩 {linea_actual}")
+            st.markdown(f"**Problemática:** {prob_actual}")
+            st.markdown("---")
 
+        indicador = df.iloc[i, 6] # Columna G: Indicador
         if pd.isna(indicador) or "Indicadores" in str(indicador):
             continue
 
-        # --- LÓGICA DE ASIGNACIÓN AUTOMÁTICA ---
+        # Lógica de Avance Automático basada en Cantidad
         cantidad_val = df.iloc[i, indices["cant"]]
-        avance_original = df.iloc[i, indices["av"]]
-        
-        # Si hay datos en cantidad, validamos el estado
         if pd.notna(cantidad_val) and str(cantidad_val).strip() != "" and cantidad_val != 0:
             estado_calculado = "Con Actividades / Completado"
             color_estado = "green"
@@ -86,25 +88,24 @@ if archivos:
             color_estado = "red"
 
         with st.container():
-            # Tabla de lectura
+            # Tabla de Datos del Excel
             datos_tabla = {
-                "Categoría": [df.iloc[i, 2]],
                 "Indicador": [indicador],
-                "Cantidad Detectada": [cantidad_val],
-                "Estado Sugerido": [estado_calculado]
+                "Cantidad": [cantidad_val],
+                "Descripción Reportada": [df.iloc[i, indices["ds"]]]
             }
             st.table(pd.DataFrame(datos_tabla))
 
-            # Espacio para Editables
+            # Panel de Auditoría
             c1, c2, c3 = st.columns([1, 2, 1])
             with c1:
                 meta_e = st.text_input("Meta Anual", value=df.iloc[i, 8], key=f"m_{i}")
-                st.markdown(f"**Avance Real:** :{color_estado}[{estado_calculado}]")
+                st.markdown(f"**Estado Sugerido:** :{color_estado}[{estado_calculado}]")
             with c2:
-                obs_e = st.text_area("Observaciones Legales / Técnicas", key=f"o_{i}", height=68)
+                obs_e = st.text_area("Observaciones de Auditoría", key=f"o_{i}", height=68)
             with c3:
-                st.write("¿Verificación?")
-                ver_e = st.checkbox("Evidencia Correcta", key=f"v_{i}")
+                st.write("¿Evidencia?")
+                ver_e = st.checkbox("Verificado", key=f"v_{i}")
 
             reporte_final.append({
                 "titulo": f"{linea_actual} - {prob_actual}", "indicador": indicador, 
@@ -114,4 +115,4 @@ if archivos:
 
     if st.button("📄 Finalizar y Generar PDF"):
         pdf_bytes = generar_pdf(reporte_final, nombre_unidad, t_sel)
-        st.download_button("📥 Descargar Informe", data=pdf_bytes, file_name=f"Reporte_{nombre_unidad}.pdf")
+        st.download_button("📥 Descargar Informe Final", data=pdf_bytes, file_name=f"Auditoria_{nombre_unidad}.pdf")
