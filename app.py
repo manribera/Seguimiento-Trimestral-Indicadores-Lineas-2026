@@ -1,20 +1,15 @@
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
+import io
 
-st.set_page_config(page_title="Auditoría - Estrategia Jurídica", layout="wide")
+st.set_page_config(page_title="Auditoría Consolidada - Estrategia Jurídica", layout="wide")
 
-# Estilo para que la tabla se vea limpia
-st.markdown("""
-    <style>
-    .reportview-container .main .block-container{ padding-top: 1rem; }
-    .stTextArea textarea { font-size: 14px; }
-    </style>
-    """, unsafe_allow_html=True)
+st.title("📋 Consolidado y Auditoría de Indicadores")
+st.write("Cargue los archivos de las delegaciones para iniciar la revisión técnica.")
 
-st.title("📋 Instrumento de Seguimiento y Auditoría")
-
-archivo = st.file_uploader("Cargar libro de delegación (.xlsm)", type=["xlsm"])
+# 1. CARGA MULTIPLE (Del nuevo código)
+archivos = st.file_uploader("📁 Sube archivos .xlsm", type=["xlsm"], accept_multiple_files=True)
 
 def generar_pdf(datos, delegacion, trimestre):
     pdf = FPDF()
@@ -36,19 +31,25 @@ def generar_pdf(datos, delegacion, trimestre):
         pdf.cell(190, 6, f"Cumplimiento: {'SI' if d['v'] else 'NO'}", ln=True)
         pdf.ln(5)
         pdf.cell(190, 0, '', 'T', ln=True)
-        pdf.ln(3)
     return pdf.output(dest='S').encode('latin-1')
 
-if archivo:
-    df = pd.read_excel(archivo, sheet_name=0, header=None)
+if archivos:
+    # Selector para elegir cuál de los archivos cargados auditar ahora
+    nombres_archivos = [a.name for a in archivos]
+    archivo_sel_nombre = st.selectbox("🎯 Seleccione la delegación a auditar", nombres_archivos)
+    
+    # Recuperar el objeto de archivo correcto
+    archivo_actual = next(a for a in archivos if a.name == archivo_sel_nombre)
+    
+    # Procesar el archivo seleccionado
+    df = pd.read_excel(archivo_actual, sheet_name=0, header=None)
 
-    # 🕵️ BUSCADOR DINÁMICO DE DELEGACIÓN (Busca la palabra y toma el valor de la derecha)
+    # 🕵️ BUSCADOR DINÁMICO DE DELEGACIÓN (Como el anterior)
     def buscar_delegacion(dataframe):
-        for r in range(5): # Solo busca en las primeras 5 filas
+        for r in range(5):
             for c in range(dataframe.shape[1]):
                 celda = str(dataframe.iloc[r, c])
                 if "DELEGACION" in celda.upper() or "UNIDAD" in celda.upper():
-                    # Intenta tomar el valor de la misma celda o la de la derecha
                     return celda.replace("Delegacion Policial:", "").strip() or str(dataframe.iloc[r, c+1])
         return "No detectada"
 
@@ -65,47 +66,39 @@ if archivo:
         t_sel = st.selectbox("Trimestre", list(trim_map.keys()))
 
     st.markdown("---")
-
     reporte_datos = []
-    linea_actual = ""
-    prob_actual = ""
+    linea_actual, prob_actual = "", ""
 
-    # Recorrido de filas para emular el Excel
+    # 🚀 VISTA CONSOLIDADA (APARTADO ÚNICO)
     for i in range(7, len(df)):
-        val_c = str(df.iloc[i, 2]) # Categoría GL/FP
+        val_c = str(df.iloc[i, 2]) # GL/FP
         val_d = str(df.iloc[i, 3]) # Línea de Acción
-        val_f = str(df.iloc[i, 5]) # Problemática
-        indicador = df.iloc[i, 6]  # Indicador
+        val_f = str(df.iloc[i, 5]) # Problemática (Columna F)
+        indicador = df.iloc[i, 6]  # Indicador (Columna G)
 
-        # Detectar Cambio de Bloque (Línea de Acción)
+        # Capturar y mostrar encabezados de Línea y Problemática
         if "LINEA DE ACCION" in val_d.upper():
             linea_actual = val_d
             prob_actual = val_f if pd.notna(df.iloc[i, 5]) else prob_actual
             st.markdown(f"### 🚩 {linea_actual}")
-            st.markdown(f"**Problemática:** {prob_actual}")
+            st.markdown(f"**Problemática Detectada:** {prob_actual}")
             st.markdown("---")
 
-        # Solo procesar filas que tienen indicadores reales
         if pd.isna(indicador) or "Indicadores" in str(indicador):
             continue
 
-        # FILA ÚNICA CONSOLIDADA (Emulación de Excel)
         with st.container():
             c_ind, c_meta, c_res, c_aud = st.columns([2, 1, 2, 2])
-            
             with c_ind:
                 st.write(f"**[{val_c}]**\n{indicador}")
-            
             with c_meta:
-                m_edit = st.text_input("Meta", value=df.iloc[i, 8], key=f"m_{i}")
+                m_edit = st.text_input("Meta", value=df.iloc[i, 8], key=f"m_{i}_{archivo_actual.name}")
                 st.write(f"**Avance:** {df.iloc[i, trim_map[t_sel]['av']]}")
-            
             with c_res:
-                st.text_area("Descripción", value=df.iloc[i, trim_map[t_sel]['ds']], key=f"d_{i}", height=120)
-            
+                st.text_area("Descripción", value=df.iloc[i, trim_map[t_sel]['ds']], key=f"d_{i}_{archivo_actual.name}", height=120)
             with c_aud:
-                obs_e = st.text_area("Observaciones Auditor", key=f"o_{i}", height=90)
-                ver_e = st.checkbox("Evidencia verificada", key=f"v_{i}")
+                obs_e = st.text_area("Observaciones Auditor", key=f"o_{i}_{archivo_actual.name}", height=90)
+                ver_e = st.checkbox("Evidencia verificada", key=f"v_{i}_{archivo_actual.name}")
 
             reporte_datos.append({
                 "titulo": f"{linea_actual} - {prob_actual}", "indicador": indicador, 
@@ -113,7 +106,11 @@ if archivo:
             })
             st.markdown("<br>", unsafe_allow_html=True)
 
-    # Botón Final
+    if st.button("📄 Generar Informe PDF"):
+        if reporte_datos:
+            pdf_bytes = generar_pdf(reporte_datos, nombre_delegacion, t_sel)
+            st.download_button("📥 Descargar PDF", data=pdf_bytes, 
+                               file_name=f"Auditoria_{nombre_delegacion}.pdf", mime="application/pdf")
     st.markdown("---")
     if st.button("📄 Generar y Descargar Reporte Final"):
         if reporte_datos:
