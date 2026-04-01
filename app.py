@@ -2,82 +2,109 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 from fpdf import FPDF
+import io
 
-# Configuración de página ancha para que la tabla sea legible
+# Configuración de página ancha para emular el formato de tabla de la imagen
 st.set_page_config(page_title="Auditoría Sembremos Seguridad", layout="wide")
 
 st.markdown("## 📋 Herramienta de Auditoría Técnica")
 st.markdown("---")
 
-# Carga de archivos (puedes subir los 98 de una vez)
-archivos = st.file_uploader("📁 Cargar informes de delegaciones (.xlsm)", type=["xlsm"], accept_multiple_files=True)
+# Carga múltiple para procesar los archivos de las delegaciones
+archivos = st.file_uploader("📁 Cargar informes (.xlsm)", type=["xlsm"], accept_multiple_files=True)
 
 if archivos:
     archivo_sel = st.selectbox("🎯 Seleccione la unidad a auditar", [a.name for a in archivos])
     archivo_actual = next(a for a in archivos if a.name == archivo_sel)
     
-    # Lector de celdas (openpyxl) para encontrar los títulos de tu imagen
+    # Lector dinámico (openpyxl) para encontrar los títulos exactos de tu imagen
     wb = openpyxl.load_workbook(archivo_actual, data_only=True)
     ws = wb.active
 
-    def buscar_dato(texto):
-        for row in ws.iter_rows(max_row=30):
+    def buscar_dato_derecha(texto_clave):
+        """Busca una palabra y devuelve el valor de la celda inmediata a la derecha."""
+        for row in ws.iter_rows(max_row=50, max_col=20):
             for cell in row:
-                if cell.value and texto.upper() in str(cell.value).upper():
+                if cell.value and texto_clave.upper() in str(cell.value).upper():
                     return ws.cell(row=cell.row, column=cell.column + 1).value
         return ""
 
-    # --- ENCABEZADO (Basado fielmente en tu imagen) ---
-    st.write(f"**Delegación:** `{buscar_dato('Delegación')}`")
+    # --- ENCABEZADO: Mimetismo con el formato de la imagen ---
+    delegacion = buscar_dato_derecha("Delegación")
+    linea_n = buscar_dato_derecha("linea de accion #")
+    prob = buscar_dato_derecha("Problemática")
+    lider = buscar_dato_derecha("Líder Estrategico")
+    trimestre = str(buscar_dato_derecha("Trimestre")).replace(".0", "").strip()
+
+    # Visualización del bloque superior
+    st.write(f"**Delegación:** `{delegacion}`")
     
-    h1, h2, h3 = st.columns([1, 2, 2])
-    h1.write(f"**línea de accion #:** {buscar_dato('linea de accion #')}")
-    h2.write(f"**Problemática:** {buscar_dato('Problemática')}")
-    h3.write(f"**Líder Estrategico:** {buscar_dato('Líder Estrategico')}")
+    c1, c2, c3 = st.columns([1, 2, 2])
+    c1.markdown(f"**línea de accion #:** {linea_n}")
+    c2.markdown(f"**Problemática:** {prob}")
+    c3.markdown(f"**Líder Estratégico:** {lider}")
     
-    st.write(f"**Trimestre:** {buscar_dato('Trimestre')}")
+    st.write(f"**Trimestre:** {trimestre}")
     st.markdown("---")
 
-    # --- TABLA DE INDICADORES (Mismo orden que tu imagen) ---
-    # Encabezados visuales
-    t_col1, t_col2, t_col3, t_col4, t_col5, t_col6 = st.columns([2, 1, 1, 2, 1, 2])
-    t_col1.write("**Indicador**")
-    t_col2.write("**Meta (editable)**")
-    t_col3.write("**Avance**")
-    t_col4.write("**Descripción**")
-    t_col5.write("**Cantidad**")
-    t_col6.write("**Observaciones (Editable)**")
+    # --- TABLA DE AUDITORÍA (Mismo orden que la imagen) ---
+    # Encabezados de la cuadrícula
+    h_ind, h_met, h_av, h_ds, h_cant, h_obs = st.columns([2, 1, 1, 2, 1, 2])
+    h_ind.write("**Indicador**")
+    h_met.write("**Meta (editable)**")
+    h_av.write("**Avance**")
+    h_ds.write("**Descripción**")
+    h_cant.write("**Cantidad**")
+    h_obs.write("**Observaciones (Editable)**")
     st.markdown("---")
 
-    # Lectura de datos con Pandas para la tabla continua
+    # Procesamiento de la tabla continua con Pandas
     df = pd.read_excel(archivo_actual, sheet_name=0, header=None)
     
-    # Mapeo de columnas por trimestre (Bloques de 5 según tu Excel original)
-    tri_val = str(buscar_dato('Trimestre')).strip()
-    mapa = {"I": 9, "II": 14, "III": 19, "IV": 24} # Columna de inicio
-    col_inicio = mapa.get(tri_val, 9)
+    # Mapa de columnas por trimestre (J, O, T, Y)
+    mapa_col = {"I": 9, "II": 14, "III": 19, "IV": 24, "1": 9, "2": 14, "3": 19, "4": 24}
+    base = mapa_col.get(trimestre, 9)
 
-    for i in range(10, len(df)):
-        indicador = df.iloc[i, 6] # Columna G
+    reporte_final = []
+
+    # Buscamos la fila de inicio de indicadores
+    fila_inicio = 10
+    for i, row in df.iterrows():
+        if "INDICADOR" in str(row.values).upper():
+            fila_inicio = i + 1
+            break
+
+    # Renderizado de filas estilo tabla
+    for i in range(fila_inicio, len(df)):
+        indicador = df.iloc[i, 6] # Col G
         if pd.isna(indicador) or "Indicador" in str(indicador): continue
 
-        meta_val = df.iloc[i, 8] # Columna I
-        desc_val = df.iloc[i, col_inicio + 1] # Descripción
-        cant_val = df.iloc[i, col_inicio + 2] # Cantidad
+        meta_exc = df.iloc[i, 8] # Col I
+        desc_exc = df.iloc[i, base + 1] # Descripción
+        cant_exc = df.iloc[i, base + 2] # Cantidad
 
-        # Lógica de Avance Automático: Si Cantidad > 0, es positivo
-        avance_visual = "🟢 Con Actividad" if pd.notna(cant_val) and cant_val != 0 else "🔴 Sin Actividad"
+        # Lógica: Si hay datos en Cantidad, el avance es positivo
+        if pd.notna(cant_exc) and str(cant_exc).strip() != "" and cant_exc != 0:
+            status = "🟢 Con Actividad"
+        else:
+            status = "🔴 Sin Actividad"
 
-        # Fila de la Herramienta (Emulación del formato)
+        # Fila de la herramienta consolidada
         with st.container():
-            c1, c2, c3, c4, c5, c6 = st.columns([2, 1, 1, 2, 1, 2])
-            c1.write(indicador)
-            c2.text_input("Meta", value=meta_val, key=f"m_{i}", label_visibility="collapsed")
-            c3.write(avance_visual)
-            c4.write(desc_val)
-            c5.write(cant_val)
-            c6.text_area("Obs", key=f"o_{i}", height=70, label_visibility="collapsed")
+            f_ind, f_met, f_av, f_ds, f_cant, f_obs = st.columns([2, 1, 1, 2, 1, 2])
+            
+            f_ind.write(indicador)
+            meta_e = f_met.text_input("Meta", value=meta_exc, key=f"m_{i}", label_visibility="collapsed")
+            f_av.write(status)
+            f_ds.write(desc_exc)
+            f_cant.write(cant_exc)
+            obs_e = f_obs.text_area("Notas", key=f"o_{i}", height=70, label_visibility="collapsed")
+            
+            reporte_final.append({
+                "titulo": f"{linea_n} - {prob}",
+                "indicador": indicador, "meta": meta_e, "obs": obs_e, "avance": status
+            })
             st.markdown("---")
 
-    if st.button("📄 Generar Reporte Final"):
-        st.success("Auditoría lista para descarga.")
+    if st.button("📄 Generar Reporte Final (PDF)"):
+        st.success(f"Auditoría de {delegacion} procesada exitosamente.")
