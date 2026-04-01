@@ -8,19 +8,6 @@ import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
 
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.lib.units import inch
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
-    PageBreak
-)
 
 st.set_page_config(page_title="Lector de Instrumentos", layout="wide")
 
@@ -51,13 +38,9 @@ def contains_any(text, patterns) -> bool:
 def is_meaningful_value(v) -> bool:
     if v is None:
         return False
-    return str(v).strip() != ""
-
-
-def safe_str(v):
-    if v is None:
-        return ""
-    return str(v).strip()
+    if str(v).strip() == "":
+        return False
+    return True
 
 
 # =========================================================
@@ -87,6 +70,21 @@ def get_down_value(ws, row, col, max_steps=4):
         val = ws.cell(row=r, column=col).value
         if is_meaningful_value(val):
             return val
+    return ""
+
+
+def get_near_value(ws, row, col):
+    """
+    Busca primero a la derecha y luego abajo.
+    """
+    val = get_right_value(ws, row, col, max_steps=12)
+    if is_meaningful_value(val):
+        return val
+
+    val = get_down_value(ws, row, col, max_steps=4)
+    if is_meaningful_value(val):
+        return val
+
     return ""
 
 
@@ -154,78 +152,34 @@ def get_delegacion(ws):
 
 
 # =========================================================
-# EXTRAER VALOR CORRECTO DE LÍNEA DE ACCIÓN
+# EXTRAER NÚMERO / VALOR DE LÍNEA DE ACCIÓN
 # =========================================================
-def looks_like_bad_line_value(text: str) -> bool:
-    t = norm_text(text)
-
-    bad_patterns = [
-        "problemática",
-        "problematica",
-        "líder",
-        "lider",
-        "delegación",
-        "delegacion",
-        "trimestre",
-        "indicador",
-        "meta",
-        "avance",
-        "descripción",
-        "descripcion",
-        "cantidad",
-        "observaciones",
-        "linea de accion",
-        "línea de acción",
-    ]
-    return any(p in t for p in bad_patterns)
-
-
 def extract_line_number_from_area(ws, start_row, start_col):
     """
-    Busca el número o valor real de la línea de acción.
-    Prioriza valores cortos o numéricos cercanos al rótulo.
+    Busca el número o valor real cerca del texto 'línea de acción'.
     """
-    candidates = []
-
-    # misma fila
-    for c in range(start_col + 1, min(ws.max_column, start_col + 8) + 1):
+    # 1. Mismo renglón, hacia la derecha
+    for c in range(start_col + 1, min(ws.max_column, start_col + 10) + 1):
         val = ws.cell(start_row, c).value
         if is_meaningful_value(val):
             txt = clean_text(val)
-            if not looks_like_bad_line_value(txt):
-                candidates.append(txt)
+            if "línea de acción" not in norm_text(txt) and "linea de accion" not in norm_text(txt):
+                return txt
 
-    # filas cercanas
-    for r in range(start_row, min(ws.max_row, start_row + 2) + 1):
-        for c in range(start_col, min(ws.max_column, start_col + 8) + 1):
+    # 2. Renglones cercanos
+    for r in range(start_row, min(ws.max_row, start_row + 3) + 1):
+        for c in range(start_col, min(ws.max_column, start_col + 10) + 1):
             val = ws.cell(r, c).value
             if is_meaningful_value(val):
                 txt = clean_text(val)
-                if not looks_like_bad_line_value(txt):
-                    candidates.append(txt)
+                if "línea de acción" not in norm_text(txt) and "linea de accion" not in norm_text(txt):
+                    return txt
 
-    if not candidates:
-        return ""
-
-    # preferir valor corto o numérico
-    numeric_candidates = []
-    for x in candidates:
-        m = re.search(r"\d+([.\-]\d+)?", x)
-        if m:
-            numeric_candidates.append(m.group(0))
-
-    if numeric_candidates:
-        return numeric_candidates[0]
-
-    short_candidates = [x for x in candidates if len(x) <= 20]
-    if short_candidates:
-        return short_candidates[0]
-
-    return candidates[0]
+    return ""
 
 
 # =========================================================
-# DETECTAR BLOQUES
+# DETECTAR TODOS LOS BLOQUES
 # =========================================================
 def find_line_action_starts(ws):
     starts = []
@@ -244,6 +198,7 @@ def find_line_action_starts(ws):
                 })
                 break
 
+    # limpiar duplicados cercanos
     cleaned = []
     last_row = -999
 
@@ -256,20 +211,16 @@ def find_line_action_starts(ws):
 
 
 # =========================================================
-# EXTRAER CAMPOS CERCANOS
+# EXTRAER CAMPOS DE CADA BLOQUE
 # =========================================================
 def search_value_near_keywords(ws, start_row, end_row, keywords):
     for r in range(start_row, min(end_row, ws.max_row) + 1):
         for c in range(1, ws.max_column + 1):
             val = ws.cell(r, c).value
             if contains_any(val, keywords):
-                derecha = get_right_value(ws, r, c, max_steps=10)
-                if is_meaningful_value(derecha):
-                    return clean_text(derecha)
-
-                abajo = get_down_value(ws, r, c, max_steps=3)
-                if is_meaningful_value(abajo):
-                    return clean_text(abajo)
+                cerca = get_near_value(ws, r, c)
+                if is_meaningful_value(cerca):
+                    return clean_text(cerca)
     return ""
 
 
@@ -278,11 +229,13 @@ def detect_trimester(ws, start_row, end_row):
         txt = norm_text(row_text(ws, r))
 
         if "trimestre" in txt:
+            # buscar valor directo en las celdas
             for c in range(1, ws.max_column + 1):
                 v = clean_text(ws.cell(r, c).value)
                 if v in ["I", "II", "III", "IV"]:
                     return v
 
+            # detección por texto
             if " iv" in f" {txt}" or "cuarto" in txt or "4" in txt:
                 return "IV"
             if " iii" in f" {txt}" or "tercer" in txt or "3" in txt:
@@ -296,7 +249,7 @@ def detect_trimester(ws, start_row, end_row):
 
 
 # =========================================================
-# ENCABEZADOS DE TABLA
+# DETECTAR ENCABEZADOS DE TABLA
 # =========================================================
 def detect_header_row(ws, start_row, end_row):
     best_row = None
@@ -348,7 +301,7 @@ def map_headers(ws, header_row):
         if "indicador" in t:
             header_map["Indicador"] = c
         elif "meta" in t:
-            header_map["Meta"] = c
+            header_map["Meta (editable)"] = c
         elif "avance" in t:
             header_map["Avance"] = c
         elif "descripcion" in t or "descripción" in t:
@@ -356,22 +309,22 @@ def map_headers(ws, header_row):
         elif "cantidad" in t:
             header_map["Cantidad"] = c
         elif "observ" in t:
-            header_map["Observaciones"] = c
+            header_map["Observaciones (Editable)"] = c
 
     return header_map
 
 
 # =========================================================
-# TABLA DETALLE
+# EXTRAER TABLA
 # =========================================================
 def extract_table(ws, header_row, block_end_row):
     columns = [
         "Indicador",
-        "Meta",
+        "Meta (editable)",
         "Avance",
         "Descripción",
         "Cantidad",
-        "Observaciones"
+        "Observaciones (Editable)"
     ]
 
     header_map = map_headers(ws, header_row)
@@ -387,7 +340,10 @@ def extract_table(ws, header_row, block_end_row):
 
         for col_name in columns:
             col_idx = header_map.get(col_name)
-            row_data[col_name] = ws.cell(r, col_idx).value if col_idx else ""
+            if col_idx:
+                row_data[col_name] = ws.cell(r, col_idx).value
+            else:
+                row_data[col_name] = ""
 
         for k in row_data:
             if row_data[k] is None:
@@ -408,7 +364,7 @@ def extract_table(ws, header_row, block_end_row):
 
 
 # =========================================================
-# EXTRAER TODOS LOS BLOQUES
+# EXTRAER TODOS LOS BLOQUES DE LA HOJA
 # =========================================================
 def extract_blocks_from_sheet(ws):
     starts = find_line_action_starts(ws)
@@ -450,9 +406,17 @@ def extract_blocks_from_sheet(ws):
             min(start_row + 25, end_row)
         )
 
-        tabla = extract_table(ws, header_row, end_row) if header_row else pd.DataFrame(columns=[
-            "Indicador", "Meta", "Avance", "Descripción", "Cantidad", "Observaciones"
-        ])
+        if header_row:
+            tabla = extract_table(ws, header_row, end_row)
+        else:
+            tabla = pd.DataFrame(columns=[
+                "Indicador",
+                "Meta (editable)",
+                "Avance",
+                "Descripción",
+                "Cantidad",
+                "Observaciones (Editable)"
+            ])
 
         blocks.append({
             "delegacion": delegacion,
@@ -469,175 +433,51 @@ def extract_blocks_from_sheet(ws):
 
 
 # =========================================================
-# RESUMEN PARA TABLERO
+# EXPORTAR A EXCEL
 # =========================================================
-def build_summary_df(blocks):
-    rows = []
+def build_export_file(block, df_editado):
+    output = BytesIO()
 
-    for i, b in enumerate(blocks, start=1):
-        rows.append({
-            "Línea": b["linea_accion"] if b["linea_accion"] else str(i),
-            "Problemática": b["problematica"],
-            "Líder Estratégico": b["lider"],
-            "Trimestre": b["trimestre"],
-            "Indicadores": len(b["tabla"]) if not b["tabla"].empty else 0,
-        })
+    resumen = pd.DataFrame({
+        "Campo": [
+            "Delegación",
+            "Línea de acción",
+            "Problemática",
+            "Líder Estratégico",
+            "Trimestre",
+            "Fila inicio",
+            "Fila fin",
+        ],
+        "Valor": [
+            block.get("delegacion", ""),
+            block.get("linea_accion", ""),
+            block.get("problematica", ""),
+            block.get("lider", ""),
+            block.get("trimestre", ""),
+            block.get("rango_inicio", ""),
+            block.get("rango_fin", ""),
+        ]
+    })
 
-    return pd.DataFrame(rows)
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        resumen.to_excel(writer, sheet_name="Resumen", index=False)
+        df_editado.to_excel(writer, sheet_name="Detalle", index=False)
 
-
-# =========================================================
-# PDF
-# =========================================================
-def paragraph(text, style):
-    return Paragraph(str(text).replace("\n", "<br/>"), style)
-
-
-def build_pdf_report(blocks, delegacion, trimestre_general):
-    buffer = BytesIO()
-
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=letter,
-        rightMargin=30,
-        leftMargin=30,
-        topMargin=35,
-        bottomMargin=30
-    )
-
-    styles = getSampleStyleSheet()
-
-    style_title = ParagraphStyle(
-        "title_custom",
-        parent=styles["Title"],
-        alignment=TA_CENTER,
-        fontSize=16,
-        leading=20,
-        spaceAfter=10
-    )
-
-    style_subtitle = ParagraphStyle(
-        "subtitle_custom",
-        parent=styles["Heading2"],
-        alignment=TA_LEFT,
-        fontSize=11,
-        leading=14,
-        spaceAfter=8
-    )
-
-    style_normal = ParagraphStyle(
-        "normal_custom",
-        parent=styles["BodyText"],
-        fontSize=9,
-        leading=11
-    )
-
-    style_small = ParagraphStyle(
-        "small_custom",
-        parent=styles["BodyText"],
-        fontSize=8,
-        leading=10
-    )
-
-    elements = []
-
-    elements.append(Paragraph("REPORTE TRIMESTRAL DE LÍNEAS DE ACCIÓN", style_title))
-    elements.append(Paragraph(f"<b>Delegación:</b> {delegacion or 'No detectada'}", style_subtitle))
-    elements.append(Paragraph(f"<b>Trimestre:</b> {trimestre_general or 'No detectado'}", style_subtitle))
-    elements.append(Spacer(1, 10))
-
-    # Resumen general
-    elements.append(Paragraph("Resumen general", style_subtitle))
-
-    summary_data = [["Línea", "Problemática", "Líder Estratégico", "Trimestre", "Indicadores"]]
-    for i, b in enumerate(blocks, start=1):
-        summary_data.append([
-            safe_str(b["linea_accion"] if b["linea_accion"] else i),
-            safe_str(b["problematica"]),
-            safe_str(b["lider"]),
-            safe_str(b["trimestre"]),
-            str(len(b["tabla"]) if not b["tabla"].empty else 0)
-        ])
-
-    summary_table = Table(summary_data, repeatRows=1, colWidths=[50, 160, 140, 60, 60])
-    summary_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D9E2F3")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F7F7")]),
-    ]))
-    elements.append(summary_table)
-    elements.append(Spacer(1, 14))
-
-    # Detalle por línea
-    for i, b in enumerate(blocks, start=1):
-        linea_txt = safe_str(b["linea_accion"] if b["linea_accion"] else i)
-
-        elements.append(Paragraph(f"Línea de acción #{linea_txt}", style_subtitle))
-        elements.append(Paragraph(f"<b>Problemática:</b> {safe_str(b['problematica'])}", style_normal))
-        elements.append(Paragraph(f"<b>Líder Estratégico:</b> {safe_str(b['lider'])}", style_normal))
-        elements.append(Paragraph(f"<b>Trimestre:</b> {safe_str(b['trimestre'])}", style_normal))
-        elements.append(Spacer(1, 6))
-
-        detail_data = [[
-            "Indicador", "Meta", "Avance", "Descripción", "Cantidad", "Observaciones"
-        ]]
-
-        if not b["tabla"].empty:
-            for _, row in b["tabla"].iterrows():
-                detail_data.append([
-                    paragraph(row.get("Indicador", ""), style_small),
-                    paragraph(row.get("Meta", ""), style_small),
-                    paragraph(row.get("Avance", ""), style_small),
-                    paragraph(row.get("Descripción", ""), style_small),
-                    paragraph(row.get("Cantidad", ""), style_small),
-                    paragraph(row.get("Observaciones", ""), style_small),
-                ])
-        else:
-            detail_data.append(["Sin datos", "", "", "", "", ""])
-
-        detail_table = Table(
-            detail_data,
-            repeatRows=1,
-            colWidths=[120, 90, 55, 95, 55, 110]
-        )
-
-        detail_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#B4C6E7")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-            ("TOPPADDING", (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
-        ]))
-
-        elements.append(detail_table)
-        elements.append(Spacer(1, 14))
-
-    doc.build(elements)
-    pdf = buffer.getvalue()
-    buffer.close()
-    return pdf
+    output.seek(0)
+    return output.getvalue()
 
 
 # =========================================================
-# INTERFAZ
+# ESTILOS
 # =========================================================
 st.markdown("""
 <style>
 .block-container {
-    max-width: 1400px;
+    max-width: 1350px;
     padding-top: 1rem;
     padding-bottom: 2rem;
 }
+
 .form-box {
     border: 1px solid #444;
     padding: 16px;
@@ -645,11 +485,22 @@ st.markdown("""
     margin-bottom: 14px;
     border-radius: 10px;
 }
+
+.small-note {
+    font-size: 0.92rem;
+    opacity: 0.85;
+}
 </style>
 """, unsafe_allow_html=True)
 
+
+# =========================================================
+# INTERFAZ
+# =========================================================
 st.title("Herramienta de lectura del instrumento")
-st.write("Sube un archivo Excel y la app leerá toda la hoja para generar el reporte trimestral en PDF.")
+st.write(
+    "Sube un archivo Excel y la app leerá toda la hoja para detectar todas las líneas de acción."
+)
 
 uploaded_file = st.file_uploader(
     "Arrastra y suelta el archivo .xlsm o .xlsx",
@@ -673,15 +524,22 @@ if uploaded_file is not None:
             st.warning("No se encontraron bloques de líneas de acción en la hoja.")
             st.stop()
 
-        delegacion = blocks[0]["delegacion"] if blocks else ""
-        trimestre_general = ""
-        for b in blocks:
-            if safe_str(b["trimestre"]):
-                trimestre_general = b["trimestre"]
-                break
-
         st.success(f"Hoja detectada: {main_sheet}")
-        st.info(f"Líneas de acción encontradas en toda la hoja: {len(blocks)}")
+        st.info(f"Bloques encontrados en toda la hoja: {len(blocks)}")
+
+        options = []
+        for i, b in enumerate(blocks, start=1):
+            linea = b["linea_accion"] if b["linea_accion"] else f"Bloque {i}"
+            prob = b["problematica"] if b["problematica"] else "Sin problemática detectada"
+            options.append(f"{i}. Línea {linea} | {prob}")
+
+        selected_idx = st.selectbox(
+            "Seleccione la línea de acción detectada",
+            options=list(range(len(options))),
+            format_func=lambda x: options[x]
+        )
+
+        bloque = blocks[selected_idx]
 
         st.markdown('<div class="form-box">', unsafe_allow_html=True)
 
@@ -691,65 +549,108 @@ if uploaded_file is not None:
         with c2:
             st.text_input(
                 "Delegación",
-                value=delegacion,
+                value=bloque["delegacion"],
                 label_visibility="collapsed",
-                disabled=True
+                key="delegacion"
             )
 
-        c1, c2 = st.columns([1.2, 4])
+        c1, c2, c3, c4, c5, c6 = st.columns([1.4, 1.5, 1.2, 1.8, 1.4, 1.8])
+
+        with c1:
+            st.markdown("### línea de acción #:")
+        with c2:
+            st.text_input(
+                "Línea de acción",
+                value=bloque["linea_accion"],
+                label_visibility="collapsed",
+                key="linea_accion"
+            )
+
+        with c3:
+            st.markdown("### Problemática:")
+        with c4:
+            st.text_input(
+                "Problemática",
+                value=bloque["problematica"],
+                label_visibility="collapsed",
+                key="problematica"
+            )
+
+        with c5:
+            st.markdown("### Líder Estratégico:")
+        with c6:
+            st.text_input(
+                "Líder Estratégico",
+                value=bloque["lider"],
+                label_visibility="collapsed",
+                key="lider"
+            )
+
+        c1, c2 = st.columns([1.4, 1.2])
         with c1:
             st.markdown("### Trimestre:")
         with c2:
             trim_options = ["", "I", "II", "III", "IV"]
-            trim_value = trimestre_general if trimestre_general in trim_options else ""
-            trimestre_general = st.selectbox(
+            trim_value = bloque["trimestre"] if bloque["trimestre"] in trim_options else ""
+            selected_trim = st.selectbox(
                 "Trimestre",
                 trim_options,
                 index=trim_options.index(trim_value),
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                key="trimestre"
             )
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.subheader("Resumen de líneas detectadas")
+        st.subheader("Detalle")
 
-        summary_df = build_summary_df(blocks)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        df = bloque["tabla"].copy()
 
-        st.caption("El PDF incluirá el detalle completo de todas las líneas de acción detectadas en la hoja.")
+        if df.empty:
+            df = pd.DataFrame([{
+                "Indicador": "",
+                "Meta (editable)": "",
+                "Avance": "",
+                "Descripción": "",
+                "Cantidad": "",
+                "Observaciones (Editable)": ""
+            }])
 
-        generar_pdf = st.button("Generar reporte trimestral en PDF")
+        df_editado = st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key="detalle_tabla"
+        )
 
-        if generar_pdf:
-            pdf_bytes = build_pdf_report(blocks, delegacion, trimestre_general)
-            st.success("Reporte PDF generado correctamente.")
+        c1, c2 = st.columns([1.5, 4])
 
+        with c1:
+            export_bytes = build_export_file(
+                {
+                    **bloque,
+                    "trimestre": selected_trim
+                },
+                df_editado
+            )
             st.download_button(
-                label="Descargar reporte trimestral PDF",
-                data=pdf_bytes,
-                file_name=f"reporte_trimestral_{delegacion or 'delegacion'}.pdf",
-                mime="application/pdf"
+                "Descargar extracción en Excel",
+                data=export_bytes,
+                file_name="extraccion_linea_accion.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         with st.expander("Resumen técnico"):
-            st.write(f"**Hoja detectada:** {main_sheet}")
-            st.write(f"**Delegación:** {delegacion}")
-            st.write(f"**Trimestre general:** {trimestre_general}")
-            st.write(f"**Cantidad de líneas detectadas:** {len(blocks)}")
-
-            debug_rows = []
-            for i, b in enumerate(blocks, start=1):
-                debug_rows.append({
-                    "Bloque": i,
-                    "Línea detectada": b["linea_accion"],
-                    "Problemática": b["problematica"],
-                    "Líder": b["lider"],
-                    "Trimestre": b["trimestre"],
-                    "Fila inicio": b["rango_inicio"],
-                    "Fila fin": b["rango_fin"],
-                    "Filas detalle": len(b["tabla"]) if not b["tabla"].empty else 0
-                })
-            st.dataframe(pd.DataFrame(debug_rows), use_container_width=True, hide_index=True)
+            st.write(f"**Rango del bloque:** filas {bloque['rango_inicio']} a {bloque['rango_fin']}")
+            st.write(f"**Delegación:** {bloque['delegacion']}")
+            st.write(f"**Línea de acción detectada:** {bloque['linea_accion']}")
+            st.write(f"**Problemática detectada:** {bloque['problematica']}")
+            st.write(f"**Líder detectado:** {bloque['lider']}")
+            st.write(f"**Trimestre detectado:** {selected_trim}")
+            st.write(f"**Filas extraídas en detalle:** {len(df_editado)}")
+            st.write("**Columnas detectadas:**")
+            st.write(list(df_editado.columns))
 
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
