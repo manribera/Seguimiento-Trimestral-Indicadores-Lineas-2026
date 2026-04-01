@@ -22,7 +22,6 @@ from reportlab.platypus import (
 
 st.set_page_config(page_title="Seguimiento de líneas de acción", layout="wide")
 
-
 # =========================================================
 # SESSION STATE
 # =========================================================
@@ -31,6 +30,9 @@ if "lineas_guardadas" not in st.session_state:
 
 if "archivo_nombre" not in st.session_state:
     st.session_state["archivo_nombre"] = ""
+
+if "pdf_final" not in st.session_state:
+    st.session_state["pdf_final"] = None
 
 
 # =========================================================
@@ -166,8 +168,12 @@ def get_delegacion(ws):
     return ""
 
 
+# =========================================================
+# LÍNEA DE ACCIÓN
+# =========================================================
 def looks_like_bad_line_value(text: str) -> bool:
     t = norm_text(text)
+
     bad_patterns = [
         "problemática",
         "problematica",
@@ -177,6 +183,7 @@ def looks_like_bad_line_value(text: str) -> bool:
         "lider",
         "delegación",
         "delegacion",
+        "municipalidad",
         "trimestre",
         "indicador",
         "meta",
@@ -194,6 +201,7 @@ def looks_like_bad_line_value(text: str) -> bool:
 def extract_line_number_from_area(ws, start_row, start_col):
     candidates = []
 
+    # Misma fila a la derecha
     for c in range(start_col + 1, min(ws.max_column, start_col + 8) + 1):
         val = ws.cell(start_row, c).value
         if is_meaningful(val):
@@ -201,6 +209,7 @@ def extract_line_number_from_area(ws, start_row, start_col):
             if not looks_like_bad_line_value(txt):
                 candidates.append(txt)
 
+    # Filas cercanas
     for r in range(start_row, min(ws.max_row, start_row + 3) + 1):
         for c in range(start_col, min(ws.max_column, start_col + 6) + 1):
             val = ws.cell(r, c).value
@@ -212,12 +221,14 @@ def extract_line_number_from_area(ws, start_row, start_col):
     if not candidates:
         return ""
 
+    # Preferir número
     for x in candidates:
         m = re.search(r"\d+([.\-]\d+)?", str(x))
         if m:
             return m.group(0)
 
-    short_candidates = [x for x in candidates if len(str(x).strip()) <= 15]
+    # Preferir textos cortos
+    short_candidates = [x for x in candidates if len(str(x).strip()) <= 10]
     if short_candidates:
         return str(short_candidates[0]).strip()
 
@@ -363,7 +374,14 @@ def extract_table(ws, header_row, block_end_row):
     header_map = map_headers(ws, header_row)
 
     if "Indicador" not in header_map:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame([{
+            "Indicador": "",
+            "Meta (editable)": "",
+            "Avance": "",
+            "Descripción": "",
+            "Cantidad": "",
+            "Observaciones (Editable)": ""
+        }])
 
     data = []
     empty_count = 0
@@ -469,9 +487,9 @@ def extract_blocks_from_sheet(ws):
 
 
 # =========================================================
-# PDF COMPLETO
+# PDF
 # =========================================================
-def build_pdf_all_lines(data_lineas, delegacion_general, nombre_archivo="reporte_trimestral.pdf"):
+def build_pdf_all_lines(data_lineas, delegacion_general):
     buffer = BytesIO()
 
     doc = SimpleDocTemplate(
@@ -514,22 +532,16 @@ def build_pdf_all_lines(data_lineas, delegacion_general, nombre_archivo="reporte
     elements.append(Paragraph(f"<b>Delegación:</b> {safe_str(delegacion_general)}", normal_style))
     elements.append(Spacer(1, 8))
 
-    ordered_keys = sorted(
-        data_lineas.keys(),
-        key=lambda x: (
-            0 if str(x).isdigit() else 1,
-            int(x) if str(x).isdigit() else str(x)
-        )
-    )
+    ordered_keys = list(data_lineas.keys())
 
     for key in ordered_keys:
         item = data_lineas[key]
-
         info = item["info"]
         df = item["tabla"]
         trimestre = item["trimestre"]
+        display_linea = item.get("display_linea", key)
 
-        elements.append(Paragraph(f"<b>Línea de acción #:</b> {safe_str(key)}", normal_style))
+        elements.append(Paragraph(f"<b>Línea de acción #:</b> {safe_str(display_linea)}", normal_style))
         elements.append(Paragraph(f"<b>Problemática:</b> {safe_str(info.get('problematica', ''))}", normal_style))
         elements.append(Paragraph(f"<b>Líder Estratégico:</b> {safe_str(info.get('lider', ''))}", normal_style))
         elements.append(Paragraph(f"<b>Trimestre:</b> {safe_str(trimestre)}", normal_style))
@@ -589,7 +601,7 @@ def build_pdf_all_lines(data_lineas, delegacion_general, nombre_archivo="reporte
 st.markdown("""
 <style>
 .block-container {
-    max-width: 1450px;
+    max-width: 1500px;
     padding-top: 1rem;
     padding-bottom: 2rem;
 }
@@ -632,6 +644,7 @@ if uploaded_file is not None:
         if st.session_state["archivo_nombre"] != uploaded_file.name:
             st.session_state["archivo_nombre"] = uploaded_file.name
             st.session_state["lineas_guardadas"] = {}
+            st.session_state["pdf_final"] = None
 
         wb = load_workbook(
             BytesIO(uploaded_file.read()),
@@ -666,11 +679,15 @@ if uploaded_file is not None:
         st.info(f"Líneas detectadas: {len(blocks)}")
 
         for idx, bloque in enumerate(blocks):
-            linea_id = str(bloque["linea_accion"]) if bloque["linea_accion"] else str(idx + 1)
+            linea_id = str(bloque["linea_accion"]).strip() if bloque["linea_accion"] else str(idx + 1)
 
-            if linea_id in st.session_state["lineas_guardadas"]:
-                df_base = st.session_state["lineas_guardadas"][linea_id]["tabla"].copy()
-                trim_base = st.session_state["lineas_guardadas"][linea_id]["trimestre"]
+            # keys únicas internas
+            block_key = f"bloque_{idx}_{linea_id}"
+            save_key = f"{idx}_{linea_id}"
+
+            if save_key in st.session_state["lineas_guardadas"]:
+                df_base = st.session_state["lineas_guardadas"][save_key]["tabla"].copy()
+                trim_base = st.session_state["lineas_guardadas"][save_key]["trimestre"]
             else:
                 df_base = bloque["tabla"].copy()
                 trim_base = bloque["trimestre"] if bloque["trimestre"] in ["", "I", "II", "III", "IV"] else ""
@@ -678,39 +695,40 @@ if uploaded_file is not None:
             st.markdown('<div class="line-card">', unsafe_allow_html=True)
             st.subheader(f"Línea {linea_id}")
 
-            c1, c2, c3, c4, c5, c6 = st.columns([1.8, 1.6, 1.3, 2.2, 1.6, 1.8])
+            # Más espacio para Problemática
+            c1, c2, c3, c4, c5, c6 = st.columns([1.8, 1.2, 1.6, 3.4, 1.8, 2.0])
 
             with c1:
                 st.markdown("### línea de acción #:")
             with c2:
                 st.text_input(
-                    f"Línea de acción {linea_id}",
+                    f"Línea de acción {block_key}",
                     value=linea_id,
                     disabled=True,
                     label_visibility="collapsed",
-                    key=f"linea_{linea_id}"
+                    key=f"linea_{block_key}"
                 )
 
             with c3:
                 st.markdown("### Problemática:")
             with c4:
                 st.text_input(
-                    f"Problemática {linea_id}",
+                    f"Problemática {block_key}",
                     value=bloque["problematica"],
                     disabled=True,
                     label_visibility="collapsed",
-                    key=f"problematica_{linea_id}"
+                    key=f"problematica_{block_key}"
                 )
 
             with c5:
                 st.markdown("### Líder Estratégico:")
             with c6:
                 st.text_input(
-                    f"Líder {linea_id}",
+                    f"Líder {block_key}",
                     value=bloque["lider"],
                     disabled=True,
                     label_visibility="collapsed",
-                    key=f"lider_{linea_id}"
+                    key=f"lider_{block_key}"
                 )
 
             c7, c8, c9 = st.columns([1.4, 1.2, 4])
@@ -719,11 +737,11 @@ if uploaded_file is not None:
             with c8:
                 trim_options = ["", "I", "II", "III", "IV"]
                 selected_trim = st.selectbox(
-                    f"Trimestre {linea_id}",
+                    f"Trimestre {block_key}",
                     trim_options,
                     index=trim_options.index(trim_base if trim_base in trim_options else ""),
                     label_visibility="collapsed",
-                    key=f"trim_{linea_id}"
+                    key=f"trim_{block_key}"
                 )
 
             st.markdown("#### Detalle")
@@ -733,14 +751,15 @@ if uploaded_file is not None:
                 use_container_width=True,
                 hide_index=True,
                 num_rows="dynamic",
-                key=f"tabla_{linea_id}"
+                key=f"tabla_{block_key}"
             )
 
-            c_btn1, c_btn2 = st.columns([1.4, 5])
+            c_btn1, c_btn2 = st.columns([2.2, 5])
 
             with c_btn1:
-                if st.button(f"Guardar / Actualizar línea {linea_id}", key=f"guardar_{linea_id}"):
-                    st.session_state["lineas_guardadas"][linea_id] = {
+                if st.button(f"Guardar / Actualizar línea {linea_id}", key=f"guardar_{block_key}"):
+                    st.session_state["lineas_guardadas"][save_key] = {
+                        "display_linea": linea_id,
                         "info": {
                             "delegacion": delegacion,
                             "linea_accion": linea_id,
@@ -752,6 +771,7 @@ if uploaded_file is not None:
                         "tabla": df_editado.copy(),
                         "trimestre": selected_trim
                     }
+                    st.session_state["pdf_final"] = None
                     st.success(f"Línea {linea_id} guardada correctamente")
 
             st.markdown("</div>", unsafe_allow_html=True)
@@ -759,13 +779,16 @@ if uploaded_file is not None:
         st.markdown("## Líneas guardadas")
         if st.session_state["lineas_guardadas"]:
             cols_saved = st.columns(4)
-            for i, key in enumerate(sorted(st.session_state["lineas_guardadas"].keys(), key=lambda x: (0 if str(x).isdigit() else 1, str(x)))):
+            ordered_items = list(st.session_state["lineas_guardadas"].items())
+
+            for i, (_, item) in enumerate(ordered_items):
                 with cols_saved[i % 4]:
-                    st.write(f"✔ Línea {key}")
+                    st.write(f"✔ Línea {item.get('display_linea', '')}")
         else:
             st.info("Todavía no has guardado ninguna línea.")
 
         st.markdown("## Reporte final")
+
         if st.button("Preparar PDF con todas las líneas guardadas"):
             if not st.session_state["lineas_guardadas"]:
                 st.warning("Primero debes guardar al menos una línea.")
@@ -777,7 +800,7 @@ if uploaded_file is not None:
                 st.session_state["pdf_final"] = pdf_bytes
                 st.success("PDF generado correctamente.")
 
-        if "pdf_final" in st.session_state and st.session_state["pdf_final"]:
+        if st.session_state["pdf_final"]:
             st.download_button(
                 "Descargar PDF completo",
                 data=st.session_state["pdf_final"],
