@@ -7,6 +7,7 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -66,10 +67,26 @@ def is_meaningful(value) -> bool:
 # =========================================================
 # UTILIDADES DE EXCEL
 # =========================================================
+def get_effective_cell_value(ws, row, col):
+    """
+    Devuelve el valor real de una celda, incluyendo celdas combinadas.
+    """
+    cell = ws.cell(row=row, column=col)
+
+    if not isinstance(cell, MergedCell):
+        return cell.value
+
+    for merged_range in ws.merged_cells.ranges:
+        if merged_range.min_row <= row <= merged_range.max_row and merged_range.min_col <= col <= merged_range.max_col:
+            return ws.cell(merged_range.min_row, merged_range.min_col).value
+
+    return None
+
+
 def row_values(ws, row, max_col=None):
     if max_col is None:
         max_col = ws.max_column
-    return [ws.cell(row=row, column=c).value for c in range(1, max_col + 1)]
+    return [get_effective_cell_value(ws, row, c) for c in range(1, max_col + 1)]
 
 
 def row_text(ws, row, max_col=None):
@@ -79,7 +96,7 @@ def row_text(ws, row, max_col=None):
 
 def get_right_value(ws, row, col, max_steps=8):
     for c in range(col + 1, min(ws.max_column, col + max_steps) + 1):
-        val = ws.cell(row=row, column=c).value
+        val = get_effective_cell_value(ws, row, c)
         if is_meaningful(val):
             return val
     return ""
@@ -87,7 +104,7 @@ def get_right_value(ws, row, col, max_steps=8):
 
 def get_down_value(ws, row, col, max_steps=4):
     for r in range(row + 1, min(ws.max_row, row + max_steps) + 1):
-        val = ws.cell(row=r, column=col).value
+        val = get_effective_cell_value(ws, r, col)
         if is_meaningful(val):
             return val
     return ""
@@ -115,8 +132,8 @@ def find_best_main_sheet(wb):
         ws = wb[sheet_name]
         score = 0
 
-        max_row = min(ws.max_row, 150)
-        max_col = min(ws.max_column, 40)
+        max_row = min(ws.max_row, 220)
+        max_col = min(ws.max_column, 50)
 
         for r in range(1, max_row + 1):
             txt = norm_text(row_text(ws, r, max_col))
@@ -154,9 +171,9 @@ def find_best_main_sheet(wb):
 # DATOS GENERALES
 # =========================================================
 def get_delegacion(ws):
-    for r in range(1, min(ws.max_row, 60) + 1):
+    for r in range(1, min(ws.max_row, 80) + 1):
         for c in range(1, min(ws.max_column, 20) + 1):
-            val = ws.cell(r, c).value
+            val = get_effective_cell_value(ws, r, c)
             if "delegación" in norm_text(val) or "delegacion" in norm_text(val):
                 derecha = get_right_value(ws, r, c, max_steps=8)
                 if is_meaningful(derecha):
@@ -201,18 +218,16 @@ def looks_like_bad_line_value(text: str) -> bool:
 def extract_line_number_from_area(ws, start_row, start_col):
     candidates = []
 
-    # Misma fila a la derecha
     for c in range(start_col + 1, min(ws.max_column, start_col + 8) + 1):
-        val = ws.cell(start_row, c).value
+        val = get_effective_cell_value(ws, start_row, c)
         if is_meaningful(val):
             txt = clean_text(val)
             if not looks_like_bad_line_value(txt):
                 candidates.append(txt)
 
-    # Filas cercanas
     for r in range(start_row, min(ws.max_row, start_row + 3) + 1):
         for c in range(start_col, min(ws.max_column, start_col + 6) + 1):
-            val = ws.cell(r, c).value
+            val = get_effective_cell_value(ws, r, c)
             if is_meaningful(val):
                 txt = clean_text(val)
                 if not looks_like_bad_line_value(txt):
@@ -221,13 +236,11 @@ def extract_line_number_from_area(ws, start_row, start_col):
     if not candidates:
         return ""
 
-    # Preferir número
     for x in candidates:
         m = re.search(r"\d+([.\-]\d+)?", str(x))
         if m:
             return m.group(0)
 
-    # Preferir textos cortos
     short_candidates = [x for x in candidates if len(str(x).strip()) <= 10]
     if short_candidates:
         return str(short_candidates[0]).strip()
@@ -238,7 +251,7 @@ def extract_line_number_from_area(ws, start_row, start_col):
 def search_value_near_keywords(ws, start_row, end_row, keywords):
     for r in range(start_row, min(end_row, ws.max_row) + 1):
         for c in range(1, ws.max_column + 1):
-            val = ws.cell(r, c).value
+            val = get_effective_cell_value(ws, r, c)
             t = norm_text(val)
             if any(k in t for k in keywords):
                 cerca = get_near_value(ws, r, c)
@@ -253,7 +266,7 @@ def detect_trimester(ws, start_row, end_row):
 
         if "trimestre" in txt:
             for c in range(1, ws.max_column + 1):
-                v = clean_text(ws.cell(r, c).value)
+                v = clean_text(get_effective_cell_value(ws, r, c))
                 if v in ["I", "II", "III", "IV"]:
                     return v
 
@@ -277,7 +290,7 @@ def find_line_action_starts(ws):
 
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
-            val = ws.cell(r, c).value
+            val = get_effective_cell_value(ws, r, c)
             t = norm_text(val)
 
             if "línea de acción" in t or "linea de accion" in t:
@@ -291,8 +304,10 @@ def find_line_action_starts(ws):
 
     cleaned = []
     last_row = -999
+
+    # Más tolerancia para no perder líneas
     for item in starts:
-        if item["row"] - last_row > 2:
+        if item["row"] - last_row > 1:
             cleaned.append(item)
             last_row = item["row"]
 
@@ -331,6 +346,7 @@ def detect_header_row(ws, start_row, end_row):
                 found["observaciones"] = True
 
         score = sum(found.values())
+
         if found["indicador"] and found["meta"] and score > best_score:
             best_score = score
             best_row = r
@@ -342,7 +358,7 @@ def map_headers(ws, header_row):
     header_map = {}
 
     for c in range(1, ws.max_column + 1):
-        val = ws.cell(header_row, c).value
+        val = get_effective_cell_value(ws, header_row, c)
         t = norm_text(val)
 
         if "indicador" in t:
@@ -391,7 +407,7 @@ def extract_table(ws, header_row, block_end_row):
 
         for col_name in columns:
             col_idx = header_map.get(col_name)
-            row_data[col_name] = ws.cell(r, col_idx).value if col_idx else ""
+            row_data[col_name] = get_effective_cell_value(ws, r, col_idx) if col_idx else ""
 
         for k in row_data:
             if row_data[k] is None:
@@ -401,7 +417,7 @@ def extract_table(ws, header_row, block_end_row):
 
         if not has_content:
             empty_count += 1
-            if empty_count >= 3:
+            if empty_count >= 4:
                 break
             continue
 
@@ -460,7 +476,7 @@ def extract_blocks_from_sheet(ws):
         header_row = detect_header_row(
             ws,
             start_row,
-            min(start_row + 25, end_row)
+            min(start_row + 30, end_row)
         )
 
         tabla = extract_table(ws, header_row, end_row) if header_row else pd.DataFrame([{
@@ -662,6 +678,7 @@ if uploaded_file is not None:
             st.stop()
 
         st.success(f"Hoja detectada: {main_sheet}")
+        st.info(f"Líneas detectadas: {len(blocks)}")
 
         st.markdown('<div class="form-box">', unsafe_allow_html=True)
         c1, c2 = st.columns([1.2, 5])
@@ -676,12 +693,9 @@ if uploaded_file is not None:
             )
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.info(f"Líneas detectadas: {len(blocks)}")
-
         for idx, bloque in enumerate(blocks):
             linea_id = str(bloque["linea_accion"]).strip() if bloque["linea_accion"] else str(idx + 1)
 
-            # keys únicas internas
             block_key = f"bloque_{idx}_{linea_id}"
             save_key = f"{idx}_{linea_id}"
 
@@ -695,7 +709,6 @@ if uploaded_file is not None:
             st.markdown('<div class="line-card">', unsafe_allow_html=True)
             st.subheader(f"Línea {linea_id}")
 
-            # Más espacio para Problemática
             c1, c2, c3, c4, c5, c6 = st.columns([1.8, 1.2, 1.6, 3.4, 1.8, 2.0])
 
             with c1:
@@ -746,6 +759,7 @@ if uploaded_file is not None:
 
             st.markdown("#### Detalle")
 
+            # Avance, Descripción y Cantidad ya vienen del libro y quedan editables
             df_editado = st.data_editor(
                 df_base,
                 use_container_width=True,
@@ -816,6 +830,7 @@ if uploaded_file is not None:
                     "Problemática": b["problematica"],
                     "Líder": b["lider"],
                     "Trimestre detectado": b["trimestre"],
+                    "Filas detalle": len(b["tabla"]),
                     "Fila inicio": b["rango_inicio"],
                     "Fila fin": b["rango_fin"],
                 })
