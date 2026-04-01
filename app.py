@@ -68,16 +68,19 @@ def is_meaningful(value) -> bool:
 # UTILIDADES DE EXCEL
 # =========================================================
 def get_effective_cell_value(ws, row, col):
-    """
-    Devuelve el valor real de una celda, incluyendo celdas combinadas.
-    """
+    if not col:
+        return None
+
     cell = ws.cell(row=row, column=col)
 
     if not isinstance(cell, MergedCell):
         return cell.value
 
     for merged_range in ws.merged_cells.ranges:
-        if merged_range.min_row <= row <= merged_range.max_row and merged_range.min_col <= col <= merged_range.max_col:
+        if (
+            merged_range.min_row <= row <= merged_range.max_row
+            and merged_range.min_col <= col <= merged_range.max_col
+        ):
             return ws.cell(merged_range.min_row, merged_range.min_col).value
 
     return None
@@ -132,7 +135,7 @@ def find_best_main_sheet(wb):
         ws = wb[sheet_name]
         score = 0
 
-        max_row = min(ws.max_row, 220)
+        max_row = min(ws.max_row, 250)
         max_col = min(ws.max_column, 50)
 
         for r in range(1, max_row + 1):
@@ -305,7 +308,6 @@ def find_line_action_starts(ws):
     cleaned = []
     last_row = -999
 
-    # Más tolerancia para no perder líneas
     for item in starts:
         if item["row"] - last_row > 1:
             cleaned.append(item)
@@ -332,6 +334,7 @@ def detect_header_row(ws, start_row, end_row):
 
         for v in vals:
             t = norm_text(v)
+
             if "indicador" in t:
                 found["indicador"] = True
             if "meta" in t:
@@ -347,9 +350,10 @@ def detect_header_row(ws, start_row, end_row):
 
         score = sum(found.values())
 
-        if found["indicador"] and found["meta"] and score > best_score:
-            best_score = score
-            best_row = r
+        if found["indicador"] and found["meta"] and found["avance"] and found["descripcion"]:
+            if score > best_score:
+                best_score = score
+                best_row = r
 
     return best_row
 
@@ -361,17 +365,22 @@ def map_headers(ws, header_row):
         val = get_effective_cell_value(ws, header_row, c)
         t = norm_text(val)
 
-        if "indicador" in t:
+        if "indicador" in t and "Indicador" not in header_map:
             header_map["Indicador"] = c
-        elif "meta" in t:
+
+        elif "meta" in t and "Meta (editable)" not in header_map:
             header_map["Meta (editable)"] = c
-        elif "avance" in t:
+
+        elif "avance" in t and "Avance" not in header_map:
             header_map["Avance"] = c
-        elif "descripcion" in t or "descripción" in t:
+
+        elif ("descripcion" in t or "descripción" in t) and "Descripción" not in header_map:
             header_map["Descripción"] = c
-        elif "cantidad" in t:
+
+        elif "cantidad" in t and "Cantidad" not in header_map:
             header_map["Cantidad"] = c
-        elif "observ" in t:
+
+        elif "observ" in t and "Observaciones (Editable)" not in header_map:
             header_map["Observaciones (Editable)"] = c
 
     return header_map
@@ -405,13 +414,19 @@ def extract_table(ws, header_row, block_end_row):
     for r in range(header_row + 1, block_end_row + 1):
         row_data = {}
 
-        for col_name in columns:
-            col_idx = header_map.get(col_name)
-            row_data[col_name] = get_effective_cell_value(ws, r, col_idx) if col_idx else ""
+        indicador = get_effective_cell_value(ws, r, header_map.get("Indicador")) if header_map.get("Indicador") else ""
+        meta = get_effective_cell_value(ws, r, header_map.get("Meta (editable)")) if header_map.get("Meta (editable)") else ""
+        avance = get_effective_cell_value(ws, r, header_map.get("Avance")) if header_map.get("Avance") else ""
+        descripcion = get_effective_cell_value(ws, r, header_map.get("Descripción")) if header_map.get("Descripción") else ""
+        cantidad = get_effective_cell_value(ws, r, header_map.get("Cantidad")) if header_map.get("Cantidad") else ""
+        observaciones = get_effective_cell_value(ws, r, header_map.get("Observaciones (Editable)")) if header_map.get("Observaciones (Editable)") else ""
 
-        for k in row_data:
-            if row_data[k] is None:
-                row_data[k] = ""
+        row_data["Indicador"] = "" if indicador is None else indicador
+        row_data["Meta (editable)"] = "" if meta is None else meta
+        row_data["Avance"] = "" if avance is None else avance
+        row_data["Descripción"] = "" if descripcion is None else descripcion
+        row_data["Cantidad"] = "" if cantidad is None else cantidad
+        row_data["Observaciones (Editable)"] = "" if observaciones is None else observaciones
 
         has_content = any(str(v).strip() != "" for v in row_data.values())
 
@@ -424,10 +439,8 @@ def extract_table(ws, header_row, block_end_row):
         empty_count = 0
         data.append(row_data)
 
-    df = pd.DataFrame(data, columns=columns)
-
-    if df.empty:
-        df = pd.DataFrame([{
+    if not data:
+        return pd.DataFrame([{
             "Indicador": "",
             "Meta (editable)": "",
             "Avance": "",
@@ -436,7 +449,7 @@ def extract_table(ws, header_row, block_end_row):
             "Observaciones (Editable)": ""
         }])
 
-    return df
+    return pd.DataFrame(data, columns=columns)
 
 
 def extract_blocks_from_sheet(ws):
@@ -759,7 +772,6 @@ if uploaded_file is not None:
 
             st.markdown("#### Detalle")
 
-            # Avance, Descripción y Cantidad ya vienen del libro y quedan editables
             df_editado = st.data_editor(
                 df_base,
                 use_container_width=True,
