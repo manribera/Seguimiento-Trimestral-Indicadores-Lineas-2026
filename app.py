@@ -1,118 +1,98 @@
 import streamlit as st
 import pandas as pd
 from fpdf import FPDF
-import io
+import openpyxl
 
-st.set_page_config(page_title="Estrategia Jurídica - Auditoría", layout="wide")
+st.set_page_config(page_title="Auditoría Sembremos Seguridad", layout="wide")
 
-st.title("📋 Seguimiento Técnico: Líneas y Problemáticas")
-st.markdown("---")
+st.title("📋 Lector de Informes de Avance")
+st.write("Cargue los archivos para extraer la información según el formato de auditoría.")
 
-archivos = st.file_uploader("📁 Cargar archivos de delegaciones", type=["xlsm"], accept_multiple_files=True)
+archivos = st.file_uploader("📁 Subir archivos .xlsm", type=["xlsm"], accept_multiple_files=True)
 
-def generar_pdf(datos, delegacion, trimestre):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(190, 10, f"AUDITORÍA: {delegacion}", ln=True, align='C')
-    pdf.set_font("Arial", '', 11)
-    pdf.cell(190, 10, f"Trimestre: {trimestre}", ln=True, align='C')
-    pdf.ln(10)
-    for d in datos:
-        pdf.set_font("Arial", 'B', 10)
-        pdf.multi_cell(190, 7, f"SECCIÓN: {d['titulo']}")
-        pdf.set_font("Arial", '', 10)
-        pdf.multi_cell(190, 6, f"Indicador: {d['indicador']} | Meta: {d['meta']}")
-        pdf.multi_cell(190, 6, f"Estado Final: {d['estado']}")
-        pdf.set_text_color(0, 0, 255)
-        pdf.multi_cell(190, 6, f"OBSERVACIONES: {d['obs']}")
-        pdf.set_text_color(0, 0, 0)
-        pdf.cell(190, 6, f"Evidencia Verificada: {'SÍ' if d['v'] else 'NO'}", ln=True)
-        pdf.ln(4)
-        pdf.cell(190, 0, '', 'T', ln=True)
-    return pdf.output(dest='S').encode('latin-1')
+def buscar_valor(sheet, texto_buscar):
+    """Busca un texto en la hoja y retorna el valor de la celda de la derecha."""
+    for row in sheet.iter_rows():
+        for cell in row:
+            if cell.value and texto_buscar.upper() in str(cell.value).upper():
+                return sheet.cell(row=cell.row, column=cell.column + 1).value
+    return ""
 
 if archivos:
-    archivo_sel = st.selectbox("🎯 Delegación a revisar", [a.name for a in archivos])
+    archivo_sel = st.selectbox("🎯 Seleccione archivo", [a.name for a in archivos])
     archivo_actual = next(a for a in archivos if a.name == archivo_sel)
     
-    df = pd.read_excel(archivo_actual, sheet_name=0, header=None)
+    # Cargar con openpyxl para lectura celda por celda
+    wb = openpyxl.load_workbook(archivo_actual, data_only=True)
+    ws = wb.active # Asume la primera hoja
 
-    # Buscador dinámico de nombre de delegación
-    nombre_unidad = "No detectada"
-    for r in range(5):
-        for c in range(df.shape[1]):
-            if "DELEGACION" in str(df.iloc[r, c]).upper():
-                nombre_unidad = str(df.iloc[r, c+1]) if pd.notna(df.iloc[r, c+1]) else str(df.iloc[r, c])
-                break
+    # --- EXTRACCIÓN DE ENCABEZADOS ---
+    delegacion = buscar_valor(ws, "Delegación")
+    linea_accion = buscar_valor(ws, "linea de accion #")
+    problematica = buscar_valor(ws, "Problemática")
+    lider = buscar_valor(ws, "Líder Estratégico")
+    trimestre = buscar_valor(ws, "Trimestre")
 
-    st.subheader(f"📍 Unidad: {nombre_unidad}")
+    # --- INTERFAZ VISUAL (EMULANDO TU IMAGEN) ---
+    st.markdown(f"### 🏢 Delegación: {delegacion}")
     
-    # Mapeo de columnas (Avance, Descripción, Cantidad)
-    trim_map = {
-        "I Trimestre": {"av": 9, "ds": 10, "cant": 11}, 
-        "II Trimestre": {"av": 14, "ds": 15, "cant": 16},
-        "III Trimestre": {"av": 19, "ds": 20, "cant": 21},
-        "IV Trimestre": {"av": 24, "ds": 25, "cant": 26}
+    c1, c2, c3 = st.columns(3)
+    with c1: st.write(f"**Línea de Acción #:** {linea_accion}")
+    with c2: st.write(f"**Problemática:** {problematica}")
+    with c3: st.write(f"**Líder Estratégico:** {lider}")
+    
+    st.write(f"**Trimestre:** {trimestre}")
+    st.markdown("---")
+
+    # --- LECTORA DE TABLA DE INDICADORES ---
+    # Usamos pandas para la parte masiva de la tabla
+    df = pd.read_excel(archivo_actual, sheet_name=0, header=None)
+    
+    # Mapeo de columnas según tu formato
+    # (Ajustado a los índices detectados en tus capturas previas)
+    trim_indices = {
+        "I": {"av": 9, "ds": 10, "cant": 11},
+        "II": {"av": 14, "ds": 15, "cant": 16},
+        "III": {"av": 19, "ds": 20, "cant": 21},
+        "IV": {"av": 24, "ds": 25, "cant": 26}
     }
-    t_sel = st.selectbox("Trimestre de Evaluación", list(trim_map.keys()))
-    indices = trim_map[t_sel]
+    
+    idx = trim_indices.get(str(trimestre).strip(), trim_indices["I"])
 
-    reporte_final = []
-    linea_actual, prob_actual = "", ""
+    datos_auditoria = []
+    
+    # Buscamos dónde empieza la palabra "Indicador" para leer la tabla
+    start_row = 10 
+    for i, row in df.iterrows():
+        if "INDICADOR" in str(row.values).upper():
+            start_row = i + 1
+            break
 
-    # Procesamiento por fila (Desde fila 8 para capturar títulos)
-    for i in range(7, len(df)):
-        val_d = str(df.iloc[i, 3]) # Columna D: Linea de Accion #X
-        val_f = str(df.iloc[i, 5]) # Columna F: Problematica
+    # Generar filas de la tabla
+    for i in range(start_row, len(df)):
+        indicador = df.iloc[i, 6] # Col G
+        if pd.isna(indicador): continue
+        
+        meta = df.iloc[i, 8] # Col I
+        avance = df.iloc[i, idx["av"]]
+        desc = df.iloc[i, idx["ds"]]
+        cant = df.iloc[i, idx["cant"]]
 
-        # Si detectamos un nuevo bloque de Línea de Acción, actualizamos el título
-        if "LINEA DE ACCION" in val_d.upper():
-            linea_actual = val_d
-            prob_actual = val_f if pd.notna(df.iloc[i, 5]) else prob_actual
-            st.markdown(f"## 🚩 {linea_actual}")
-            st.markdown(f"**Problemática:** {prob_actual}")
-            st.markdown("---")
-
-        indicador = df.iloc[i, 6] # Columna G: Indicador
-        if pd.isna(indicador) or "Indicadores" in str(indicador):
-            continue
-
-        # Lógica de Avance Automático basada en Cantidad
-        cantidad_val = df.iloc[i, indices["cant"]]
-        if pd.notna(cantidad_val) and str(cantidad_val).strip() != "" and cantidad_val != 0:
-            estado_calculado = "Con Actividades / Completado"
-            color_estado = "green"
+        # Lógica de Avance Automático
+        if pd.notna(cant) and str(cant).strip() != "" and cant != 0:
+            estado = "✅ Con Actividades"
         else:
-            estado_calculado = "Sin Actividades"
-            color_estado = "red"
+            estado = "❌ Sin Actividades"
 
+        # Visualización en formato de filas
         with st.container():
-            # Tabla de Datos del Excel
-            datos_tabla = {
-                "Indicador": [indicador],
-                "Cantidad": [cantidad_val],
-                "Descripción Reportada": [df.iloc[i, indices["ds"]]]
-            }
-            st.table(pd.DataFrame(datos_tabla))
-
-            # Panel de Auditoría
-            c1, c2, c3 = st.columns([1, 2, 1])
-            with c1:
-                meta_e = st.text_input("Meta Anual", value=df.iloc[i, 8], key=f"m_{i}")
-                st.markdown(f"**Estado Sugerido:** :{color_estado}[{estado_calculado}]")
-            with c2:
-                obs_e = st.text_area("Observaciones de Auditoría", key=f"o_{i}", height=68)
-            with c3:
-                st.write("¿Evidencia?")
-                ver_e = st.checkbox("Verificado", key=f"v_{i}")
-
-            reporte_final.append({
-                "titulo": f"{linea_actual} - {prob_actual}", "indicador": indicador, 
-                "meta": meta_e, "estado": estado_calculado, "obs": obs_e, "v": ver_e
-            })
+            col_ind, col_met, col_av, col_ds, col_cant, col_obs = st.columns([2, 1, 1, 2, 1, 2])
+            
+            col_ind.write(indicador)
+            meta_edit = col_met.text_input("Meta", value=meta, key=f"m_{i}")
+            col_av.write(estado)
+            col_ds.write(desc)
+            col_cant.write(cant)
+            obs_edit = col_obs.text_area("Observaciones", key=f"o_{i}")
+            
             st.markdown("---")
-
-    if st.button("📄 Finalizar y Generar PDF"):
-        pdf_bytes = generar_pdf(reporte_final, nombre_unidad, t_sel)
-        st.download_button("📥 Descargar Informe Final", data=pdf_bytes, file_name=f"Auditoria_{nombre_unidad}.pdf")
