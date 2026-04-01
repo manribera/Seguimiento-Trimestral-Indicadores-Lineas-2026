@@ -8,6 +8,17 @@ import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
 
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle
+)
 
 st.set_page_config(page_title="Lector de Instrumentos", layout="wide")
 
@@ -43,6 +54,12 @@ def is_meaningful_value(v) -> bool:
     return True
 
 
+def safe_str(v) -> str:
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
 # =========================================================
 # UTILIDADES DE EXCEL
 # =========================================================
@@ -74,9 +91,6 @@ def get_down_value(ws, row, col, max_steps=4):
 
 
 def get_near_value(ws, row, col):
-    """
-    Busca primero a la derecha y luego abajo.
-    """
     val = get_right_value(ws, row, col, max_steps=12)
     if is_meaningful_value(val):
         return val
@@ -154,28 +168,63 @@ def get_delegacion(ws):
 # =========================================================
 # EXTRAER NÚMERO / VALOR DE LÍNEA DE ACCIÓN
 # =========================================================
+def looks_like_bad_line_value(text: str) -> bool:
+    t = norm_text(text)
+
+    bad_patterns = [
+        "problemática",
+        "problematica",
+        "problemática de linea",
+        "problematica de linea",
+        "líder",
+        "lider",
+        "delegación",
+        "delegacion",
+        "trimestre",
+        "indicador",
+        "meta",
+        "avance",
+        "descripción",
+        "descripcion",
+        "cantidad",
+        "observaciones",
+        "linea de accion",
+        "línea de acción",
+    ]
+    return any(p in t for p in bad_patterns)
+
+
 def extract_line_number_from_area(ws, start_row, start_col):
-    """
-    Busca el número o valor real cerca del texto 'línea de acción'.
-    """
-    # 1. Mismo renglón, hacia la derecha
-    for c in range(start_col + 1, min(ws.max_column, start_col + 10) + 1):
+    candidates = []
+
+    for c in range(start_col + 1, min(ws.max_column, start_col + 8) + 1):
         val = ws.cell(start_row, c).value
         if is_meaningful_value(val):
             txt = clean_text(val)
-            if "línea de acción" not in norm_text(txt) and "linea de accion" not in norm_text(txt):
-                return txt
+            if not looks_like_bad_line_value(txt):
+                candidates.append(txt)
 
-    # 2. Renglones cercanos
     for r in range(start_row, min(ws.max_row, start_row + 3) + 1):
-        for c in range(start_col, min(ws.max_column, start_col + 10) + 1):
+        for c in range(start_col, min(ws.max_column, start_col + 6) + 1):
             val = ws.cell(r, c).value
             if is_meaningful_value(val):
                 txt = clean_text(val)
-                if "línea de acción" not in norm_text(txt) and "linea de accion" not in norm_text(txt):
-                    return txt
+                if not looks_like_bad_line_value(txt):
+                    candidates.append(txt)
 
-    return ""
+    if not candidates:
+        return ""
+
+    for x in candidates:
+        m = re.search(r"\d+([.\-]\d+)?", str(x))
+        if m:
+            return m.group(0)
+
+    short_candidates = [x for x in candidates if len(str(x).strip()) <= 12]
+    if short_candidates:
+        return str(short_candidates[0]).strip()
+
+    return str(candidates[0]).strip()
 
 
 # =========================================================
@@ -198,7 +247,6 @@ def find_line_action_starts(ws):
                 })
                 break
 
-    # limpiar duplicados cercanos
     cleaned = []
     last_row = -999
 
@@ -229,13 +277,11 @@ def detect_trimester(ws, start_row, end_row):
         txt = norm_text(row_text(ws, r))
 
         if "trimestre" in txt:
-            # buscar valor directo en las celdas
             for c in range(1, ws.max_column + 1):
                 v = clean_text(ws.cell(r, c).value)
                 if v in ["I", "II", "III", "IV"]:
                     return v
 
-            # detección por texto
             if " iv" in f" {txt}" or "cuarto" in txt or "4" in txt:
                 return "IV"
             if " iii" in f" {txt}" or "tercer" in txt or "3" in txt:
@@ -468,21 +514,124 @@ def build_export_file(block, df_editado):
 
 
 # =========================================================
+# PDF
+# =========================================================
+def build_pdf_file(block, df_editado):
+    output = BytesIO()
+
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=letter,
+        rightMargin=30,
+        leftMargin=30,
+        topMargin=35,
+        bottomMargin=30
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "title_custom",
+        parent=styles["Title"],
+        alignment=TA_CENTER,
+        fontSize=15,
+        leading=18,
+        spaceAfter=12
+    )
+
+    normal_style = ParagraphStyle(
+        "normal_custom",
+        parent=styles["Normal"],
+        fontSize=9,
+        leading=11,
+        spaceAfter=5
+    )
+
+    small_style = ParagraphStyle(
+        "small_custom",
+        parent=styles["Normal"],
+        fontSize=8,
+        leading=10
+    )
+
+    elements = []
+
+    elements.append(Paragraph("REPORTE DE LÍNEA DE ACCIÓN", title_style))
+    elements.append(Spacer(1, 6))
+
+    elements.append(Paragraph(f"<b>Delegación:</b> {safe_str(block.get('delegacion', ''))}", normal_style))
+    elements.append(Paragraph(f"<b>Línea de acción #:</b> {safe_str(block.get('linea_accion', ''))}", normal_style))
+    elements.append(Paragraph(f"<b>Problemática:</b> {safe_str(block.get('problematica', ''))}", normal_style))
+    elements.append(Paragraph(f"<b>Líder Estratégico:</b> {safe_str(block.get('lider', ''))}", normal_style))
+    elements.append(Paragraph(f"<b>Trimestre:</b> {safe_str(block.get('trimestre', ''))}", normal_style))
+    elements.append(Spacer(1, 10))
+
+    tabla_pdf = [[
+        "Indicador",
+        "Meta",
+        "Avance",
+        "Descripción",
+        "Cantidad",
+        "Observaciones"
+    ]]
+
+    for _, row in df_editado.iterrows():
+        tabla_pdf.append([
+            Paragraph(safe_str(row.get("Indicador", "")), small_style),
+            Paragraph(safe_str(row.get("Meta (editable)", "")), small_style),
+            Paragraph(safe_str(row.get("Avance", "")), small_style),
+            Paragraph(safe_str(row.get("Descripción", "")), small_style),
+            Paragraph(safe_str(row.get("Cantidad", "")), small_style),
+            Paragraph(safe_str(row.get("Observaciones (Editable)", "")), small_style),
+        ])
+
+    if len(tabla_pdf) == 1:
+        tabla_pdf.append(["", "", "", "", "", ""])
+
+    table = Table(
+        tabla_pdf,
+        repeatRows=1,
+        colWidths=[125, 85, 55, 90, 55, 120]
+    )
+
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D9E2F3")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8F8F8")]),
+    ]))
+
+    elements.append(table)
+
+    doc.build(elements)
+    pdf_bytes = output.getvalue()
+    output.close()
+    return pdf_bytes
+
+
+# =========================================================
 # ESTILOS
 # =========================================================
 st.markdown("""
 <style>
 .block-container {
-    max-width: 1350px;
+    max-width: 1400px;
     padding-top: 1rem;
     padding-bottom: 2rem;
 }
 
 .form-box {
     border: 1px solid #444;
-    padding: 16px;
+    padding: 20px;
     margin-top: 10px;
-    margin-bottom: 14px;
+    margin-bottom: 16px;
     border-radius: 10px;
 }
 
@@ -543,7 +692,7 @@ if uploaded_file is not None:
 
         st.markdown('<div class="form-box">', unsafe_allow_html=True)
 
-        c1, c2 = st.columns([1.2, 4])
+        c1, c2 = st.columns([1.2, 5])
         with c1:
             st.markdown("### Delegación :")
         with c2:
@@ -554,7 +703,9 @@ if uploaded_file is not None:
                 key="delegacion"
             )
 
-        c1, c2, c3, c4, c5, c6 = st.columns([1.4, 1.5, 1.2, 1.8, 1.4, 1.8])
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        c1, c2, c3, c4, c5, c6 = st.columns([1.4, 1.3, 1.2, 2.0, 1.5, 1.6])
 
         with c1:
             st.markdown("### línea de acción #:")
@@ -586,7 +737,9 @@ if uploaded_file is not None:
                 key="lider"
             )
 
-        c1, c2 = st.columns([1.4, 1.2])
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        c1, c2, c3 = st.columns([1.4, 1.2, 4])
         with c1:
             st.markdown("### Trimestre:")
         with c2:
@@ -624,7 +777,7 @@ if uploaded_file is not None:
             key="detalle_tabla"
         )
 
-        c1, c2 = st.columns([1.5, 4])
+        c1, c2, c3 = st.columns([1.7, 1.7, 4])
 
         with c1:
             export_bytes = build_export_file(
@@ -639,6 +792,21 @@ if uploaded_file is not None:
                 data=export_bytes,
                 file_name="extraccion_linea_accion.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        with c2:
+            pdf_bytes = build_pdf_file(
+                {
+                    **bloque,
+                    "trimestre": selected_trim
+                },
+                df_editado
+            )
+            st.download_button(
+                "Descargar reporte en PDF",
+                data=pdf_bytes,
+                file_name="reporte_linea_accion.pdf",
+                mime="application/pdf"
             )
 
         with st.expander("Resumen técnico"):
