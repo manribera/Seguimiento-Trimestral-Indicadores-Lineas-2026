@@ -1,4 +1,4 @@
 streamlit
 pandas
 openpyxl
-laboratorio de informes
+reportlab
